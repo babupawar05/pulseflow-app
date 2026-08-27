@@ -171,7 +171,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v19';
+    const CACHE_NAME = 'apexfit-v20';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -249,11 +249,13 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ error: 'All fields including phone number are required.' });
   }
 
+  const cleanEmail = email.toLowerCase().trim();
+
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const sql = `INSERT INTO users (email, phone, password, name, age, gender, blood_group, weight, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`;
     
-    db.run(sql, [email.toLowerCase().trim(), phone.trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
+    db.run(sql, [cleanEmail, phone.trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
           return res.status(400).json({ error: 'An account with this email already exists.' });
@@ -272,8 +274,10 @@ app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
 
+  const cleanEmail = email.toLowerCase().trim();
   const sql = `SELECT * FROM users WHERE email = ?`;
-  db.get(sql, [email.toLowerCase().trim()], async (err, user) => {
+  
+  db.get(sql, [cleanEmail], async (err, user) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
 
@@ -589,14 +593,14 @@ app.get('/', (req, res) => {
       </div>
 
       <form id="formLogin" onsubmit="handleLogin(event)">
-        <div class="input-group"><label class="input-label">Email</label><input type="email" id="loginEmail" class="input-box" placeholder="e.g. user@domain.com" required /></div>
+        <div class="input-group"><label class="input-label">Email</label><input type="email" id="loginEmail" class="input-box" placeholder="e.g. user@domain.com" autocapitalize="none" required /></div>
         <div class="input-group"><label class="input-label">Password</label><input type="password" id="loginPassword" class="input-box" placeholder="••••••••" required /></div>
         <button type="submit" class="btn-main">Log In</button>
       </form>
 
       <form id="formRegister" style="display: none;" onsubmit="handleRegisterDirect(event)">
         <div class="input-group"><label class="input-label">Full Name</label><input type="text" id="regName" class="input-box" placeholder="e.g. Alex" required /></div>
-        <div class="input-group"><label class="input-label">Email</label><input type="email" id="regEmail" class="input-box" placeholder="e.g. user@domain.com" required /></div>
+        <div class="input-group"><label class="input-label">Email</label><input type="email" id="regEmail" class="input-box" placeholder="e.g. user@domain.com" autocapitalize="none" required /></div>
         <div class="input-group"><label class="input-label">Phone Number 📱</label><input type="tel" id="regPhone" class="input-box" placeholder="e.g. +91 9876543210" required /></div>
         <div class="input-group"><label class="input-label">Password</label><input type="password" id="regPassword" class="input-box" placeholder="Create password" required /></div>
         <div style="display: flex; gap: 10px;">
