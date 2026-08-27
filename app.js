@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v6';
+    const CACHE_NAME = 'pulseflow-v8';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -301,7 +301,6 @@ app.post('/api/update-profile', (req, res) => {
   });
 });
 
-// Fetch all historical logs for a user (Calendar View)
 app.get('/api/daily-logs/:userId', (req, res) => {
   const userId = req.params.userId;
   const sql = `SELECT * FROM daily_logs WHERE user_id = ? ORDER BY date DESC`;
@@ -311,7 +310,6 @@ app.get('/api/daily-logs/:userId', (req, res) => {
   });
 });
 
-// Upsert daily tracking data on a specific date (YYYY-MM-DD)
 app.post('/api/daily-log/sync', (req, res) => {
   const { userId, date, steps, distance_km, calories, active_minutes, sleep_hours, completedWorkouts } = req.body;
   if (!userId || !date) return res.status(400).json({ error: 'Missing userId or date.' });
@@ -396,11 +394,25 @@ app.get('/', (req, res) => {
       display: flex; align-items: center; gap: 6px;
     }
     .nav-actions { display: flex; gap: 6px; align-items: center; }
+    
+    /* UPDATED: Electric Violet & Indigo Glow Install Button */
     .pwa-btn {
-      display: inline-block; background: linear-gradient(45deg, var(--accent-cyan), var(--accent-green));
-      color: #02120b; border: none; font-size: 0.72rem; font-weight: 800;
-      padding: 5px 12px; border-radius: 20px; cursor: pointer;
+      display: inline-block;
+      background: linear-gradient(135deg, #8b5cf6, #6366f1);
+      color: #ffffff;
+      border: none;
+      font-size: 0.72rem;
+      font-weight: 800;
+      padding: 5px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      box-shadow: 0 0 14px rgba(139, 92, 246, 0.45);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
+    .pwa-btn:active {
+      transform: scale(0.95);
+    }
+
     .badge {
       background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3);
       color: var(--accent-green); padding: 4px 10px; border-radius: 20px; font-size: 0.72rem;
@@ -458,7 +470,6 @@ app.get('/', (req, res) => {
     .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .metric-card { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06); border-radius: 18px; padding: 14px; }
     
-    /* CALENDAR WIDGET STYLES */
     .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .calendar-nav-btn { background: rgba(255,255,255,0.08); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: 800; }
     .calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; }
@@ -614,8 +625,6 @@ app.get('/', (req, res) => {
 
     <!-- TAB 1: DAILY & CALENDAR TRACKER -->
     <div id="tab-activity" class="tab-page">
-      
-      <!-- Date Selector & Ring Card -->
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div>
@@ -697,7 +706,7 @@ app.get('/', (req, res) => {
 
         <div class="grid-4" id="mealsContainer"></div>
 
-        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 14px;">
+        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,200,0.08); padding-top: 14px;">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <b id="selectedMealTitle" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--accent-cyan);">Breakfast Breakdown</b>
             <span id="selectedMealCalorieTag" style="font-size: 0.8rem; color: var(--accent-orange); font-weight: 700;">Target: -- kcal</span>
@@ -874,13 +883,12 @@ app.get('/', (req, res) => {
       return y + '-' + m + '-' + d;
     }
 
-    // --- APPLICATION STATE ---
     let currentUser = JSON.parse(localStorage.getItem('pulseflow_session')) || null;
     let todayDateStr = getTodayDateString();
     let selectedDateStr = todayDateStr;
     let currentCalMonth = new Date().getMonth();
     let currentCalYear = new Date().getFullYear();
-    let userDailyLogs = {}; // Map of "YYYY-MM-DD" -> log record
+    let userDailyLogs = {};
 
     let currentDietMode = 'veg';
     let selectedMealIndex = 0;
@@ -975,10 +983,14 @@ app.get('/', (req, res) => {
     function switchTab(tabId) {
       document.querySelectorAll('.tab-page').forEach(page => page.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      
       const targetPage = document.getElementById('tab-' + tabId);
       if (targetPage) targetPage.classList.add('active');
+      
       const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
       if (activeBtn) activeBtn.classList.add('active');
+
+      localStorage.setItem('pulseflow_active_tab', tabId);
     }
 
     function computePlan(weight, height, age, gender) {
@@ -1019,7 +1031,6 @@ app.get('/', (req, res) => {
       return { bmi, category, tdee, targetSteps, targetCalories, minIdealWeight, maxIdealWeight, proteinG, carbG, fatG, tips, meals };
     }
 
-    // --- DAILY LOG HELPER ---
     function getCurrentActiveLog() {
       if (!userDailyLogs[selectedDateStr]) {
         userDailyLogs[selectedDateStr] = {
@@ -1078,7 +1089,6 @@ app.get('/', (req, res) => {
       } catch (e) { console.error('Daily log sync error:', e); }
     }
 
-    // --- CALENDAR LOGIC ---
     function prevMonth() {
       currentCalMonth--;
       if (currentCalMonth < 0) {
@@ -1114,7 +1124,6 @@ app.get('/', (req, res) => {
       const firstDayIndex = new Date(currentCalYear, currentCalMonth, 1).getDay();
       const daysInMonth = new Date(currentCalYear, currentCalMonth + 1, 0).getDate();
 
-      // Empty lead days
       for (let i = 0; i < firstDayIndex; i++) {
         grid.innerHTML += '<div class="cal-day empty"></div>';
       }
@@ -1366,7 +1375,9 @@ app.get('/', (req, res) => {
       if (!currentUser) return;
       document.getElementById('authCard').style.display = 'none';
       document.getElementById('bottomTabBar').style.display = 'flex';
-      switchTab('activity');
+
+      const savedTab = localStorage.getItem('pulseflow_active_tab') || 'activity';
+      switchTab(savedTab);
 
       document.getElementById('userName').innerText = 'Hi, ' + currentUser.name + ' 👋';
       document.getElementById('targetSteps').innerText = 'Target: ' + currentUser.plan.targetSteps.toLocaleString() + ' steps';
@@ -1403,7 +1414,11 @@ app.get('/', (req, res) => {
       fetchHistoricalLogs();
     }
 
-    function logout() { localStorage.removeItem('pulseflow_session'); location.reload(); }
+    function logout() { 
+      localStorage.removeItem('pulseflow_session');
+      localStorage.removeItem('pulseflow_active_tab');
+      location.reload(); 
+    }
 
     async function initAutoSensors() {
       if (isTrackingActive) return;
@@ -1423,7 +1438,6 @@ app.get('/', (req, res) => {
       const linearAccel = Math.abs(rawMag - gravity);
       const now = Date.now();
 
-      // Only increment steps for today's active record
       if (selectedDateStr !== todayDateStr) return;
 
       if (linearAccel > dynThreshold && linearAccel > lastFilteredVal) isPeakRising = true;
