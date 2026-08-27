@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v14';
+    const CACHE_NAME = 'apexfit-v15';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -485,16 +485,18 @@ app.get('/', (req, res) => {
     .cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); position: absolute; bottom: 3px; }
     .cal-dot.partial { background: var(--accent-orange); }
 
-    .filter-pills { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 12px; }
+    /* SPACED FILTER PILLS CONTAINER */
+    .filter-pills { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 22px; }
     .filter-pill {
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
-      color: var(--text-muted); font-size: 0.75rem; font-weight: 700; padding: 6px 14px;
+      color: var(--text-muted); font-size: 0.75rem; font-weight: 700; padding: 7px 14px;
       border-radius: 20px; cursor: pointer; white-space: nowrap;
     }
     .filter-pill.active { background: var(--accent-cyan); color: #02120b; border-color: var(--accent-cyan); }
+    
     .workout-card {
       background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 18px; padding: 14px; margin-bottom: 10px; cursor: pointer;
+      border-radius: 18px; padding: 14px; margin-bottom: 12px; cursor: pointer;
       display: flex; justify-content: space-between; align-items: center;
     }
     .workout-card.done { opacity: 0.45; text-decoration: line-through; border-color: var(--accent-green); }
@@ -719,7 +721,7 @@ app.get('/', (req, res) => {
     <div id="tab-workouts" class="tab-page">
       <div class="card">
         <div class="section-title">🏋️ Progressive Training Modules</div>
-        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Logged against active date: <b id="workoutDateContext" style="color:var(--accent-cyan);">Today</b></p>
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Logged against active date: <b id="workoutDateContext" style="color:var(--accent-cyan);">Today</b></p>
         
         <div class="filter-pills">
           <button class="filter-pill active" onclick="setWorkoutCategory('chest_triceps')">💥 Chest & Triceps</button>
@@ -1480,26 +1482,23 @@ app.get('/', (req, res) => {
       isTrackingActive = true;
     }
 
-    // --- STRICT STRICT PEDOMETER STEP DETECTION ENGINE ---
     function handleMotion(e) {
       if (!currentUser) return;
       const acc = e.accelerationIncludingGravity || e.acceleration;
       if (!acc) return;
 
       const rawMag = Math.sqrt((acc.x || 0)**2 + (acc.y || 0)**2 + (acc.z || 0)**2);
-      const linearAccel = Math.abs(rawMag - 9.8); // Remove earth gravity baseline
+      const linearAccel = Math.abs(rawMag - 9.8);
       const now = Date.now();
 
       if (selectedDateStr !== todayDateStr) return;
 
-      // STRICT THRESHOLD: Ignore minor jitters, typing, or desk movement (< 0.85 m/s² impact)
       const walkThreshold = 0.85;
 
       if (linearAccel > walkThreshold && linearAccel > lastFilteredVal) {
         isPeakRising = true;
       }
 
-      // STRICT CADENCE WINDOW: Human steps must be between 350ms and 1400ms apart
       if (isPeakRising && linearAccel < lastFilteredVal) {
         const timeDelta = now - lastStepTime;
         if (timeDelta > 350 && timeDelta < 1400) {
@@ -1515,7 +1514,7 @@ app.get('/', (req, res) => {
           renderCalendar();
           syncActiveLogToDB();
         } else if (timeDelta >= 1400) {
-          lastStepTime = now; // Reset step rhythm baseline
+          lastStepTime = now;
           isPeakRising = false;
         }
       }
