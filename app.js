@@ -14,11 +14,11 @@ app.use(express.json());
 const dbPath = path.join(__dirname, 'fitness.db');
 const csvPath = path.join(__dirname, 'fitness_records.csv');
 
-// --- 1. REAL-TIME EXCEL / CSV DISK SYNC (ALL USERS, APPENDED CHRONOLOGICALLY) ---
+// --- 1. REAL-TIME EXCEL / CSV DISK SYNC ---
 function exportToExcelCSV() {
   const query = `
     SELECT 
-      u.id AS user_id, u.name, u.email, u.age, u.gender, u.blood_group, u.weight, u.height,
+      u.id AS user_id, u.name, u.email, u.phone, u.age, u.gender, u.blood_group, u.weight, u.height,
       COALESCE(d.date, DATE('now', 'localtime')) AS log_date,
       COALESCE(d.steps, 0) AS daily_steps,
       COALESCE(d.distance_km, 0) AS daily_km,
@@ -36,7 +36,7 @@ function exportToExcelCSV() {
     if (err) return console.error('CSV Export Error:', err.message);
 
     const headers = [
-      'User ID', 'Full Name', 'Email', 'Age', 'Gender', 'Blood Group', 'Weight (kg)', 'Height (cm)',
+      'User ID', 'Full Name', 'Email', 'Phone Number', 'Age', 'Gender', 'Blood Group', 'Weight (kg)', 'Height (cm)',
       'Log Date (YYYY-MM-DD)', 'Steps Count', 'Distance (km)', 'Calories (kcal)', 'Active Minutes',
       'Sleep (hrs)', 'Completed Workouts', 'Registered At'
     ];
@@ -47,6 +47,7 @@ function exportToExcelCSV() {
       try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
       const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
       const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanPhone = `"${(r.phone || '').replace(/"/g, '""')}"`;
       const cleanBlood = `"${r.blood_group || 'O+'}"`;
       const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
 
@@ -54,6 +55,7 @@ function exportToExcelCSV() {
         r.user_id,
         cleanName,
         cleanEmail,
+        cleanPhone,
         r.age,
         r.gender,
         cleanBlood,
@@ -93,6 +95,7 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE,
+      phone TEXT,
       password TEXT,
       name TEXT,
       age INTEGER,
@@ -102,7 +105,9 @@ db.serialize(() => {
       height REAL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `, () => {
+    db.run(`ALTER TABLE users ADD COLUMN phone TEXT`, () => {});
+  });
 
   db.run(`
     CREATE TABLE IF NOT EXISTS daily_logs (
@@ -166,7 +171,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v15';
+    const CACHE_NAME = 'apexfit-v19';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -203,7 +208,7 @@ app.get('/sw.js', (req, res) => {
 app.get('/api/export-excel', (req, res) => {
   const query = `
     SELECT 
-      u.id AS user_id, u.name, u.email, u.age, u.gender, u.blood_group, u.weight, u.height,
+      u.id AS user_id, u.name, u.email, u.phone, u.age, u.gender, u.blood_group, u.weight, u.height,
       COALESCE(d.date, DATE('now', 'localtime')) AS log_date,
       COALESCE(d.steps, 0) AS daily_steps,
       COALESCE(d.distance_km, 0) AS daily_km,
@@ -220,15 +225,16 @@ app.get('/api/export-excel', (req, res) => {
   db.all(query, [], (err, rows) => {
     if (err) return res.status(500).send('Database read error: ' + err.message);
 
-    const headers = 'User ID,Full Name,Email,Age,Gender,Blood Group,Weight (kg),Height (cm),Log Date (YYYY-MM-DD),Steps Count,Distance (km),Calories (kcal),Active Minutes,Sleep (hrs),Completed Workouts,Registered At\r\n';
+    const headers = 'User ID,Full Name,Email,Phone Number,Age,Gender,Blood Group,Weight (kg),Height (cm),Log Date (YYYY-MM-DD),Steps Count,Distance (km),Calories (kcal),Active Minutes,Sleep (hrs),Completed Workouts,Registered At\r\n';
     const body = (rows || []).map(r => {
       let workouts = '';
       try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
       const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
       const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanPhone = `"${(r.phone || '').replace(/"/g, '""')}"`;
       const cleanBlood = `"${r.blood_group || 'O+'}"`;
       const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
-      return `${r.user_id},${cleanName},${cleanEmail},${r.age},${r.gender},${cleanBlood},${r.weight},${r.height},"${r.log_date}",${r.daily_steps},${r.daily_km},${r.daily_calories},${r.daily_active_mins},${r.daily_sleep},${cleanWorkouts},"${r.created_at}"`;
+      return `${r.user_id},${cleanName},${cleanEmail},${cleanPhone},${r.age},${r.gender},${cleanBlood},${r.weight},${r.height},"${r.log_date}",${r.daily_steps},${r.daily_km},${r.daily_calories},${r.daily_active_mins},${r.daily_sleep},${cleanWorkouts},"${r.created_at}"`;
     }).join('\r\n');
 
     res.setHeader('Content-Type', 'text/csv');
@@ -237,24 +243,17 @@ app.get('/api/export-excel', (req, res) => {
   });
 });
 
-app.get('/api/users', (req, res) => {
-  db.all('SELECT id, name, email, age, gender, blood_group, weight, height, created_at FROM users', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
 app.post('/api/register', async (req, res) => {
-  const { email, password, name, age, gender, blood_group, weight, height } = req.body;
-  if (!email || !password || !name || !age || !weight || !height) {
-    return res.status(400).json({ error: 'All fields are required.' });
+  const { email, phone, password, name, age, gender, blood_group, weight, height } = req.body;
+  if (!email || !phone || !password || !name || !age || !weight || !height) {
+    return res.status(400).json({ error: 'All fields including phone number are required.' });
   }
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const sql = `INSERT INTO users (email, password, name, age, gender, blood_group, weight, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`;
+    const sql = `INSERT INTO users (email, phone, password, name, age, gender, blood_group, weight, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`;
     
-    db.run(sql, [email.toLowerCase().trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
+    db.run(sql, [email.toLowerCase().trim(), phone.trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
           return res.status(400).json({ error: 'An account with this email already exists.' });
@@ -288,13 +287,13 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/update-profile', (req, res) => {
-  const { id, name, age, gender, blood_group, weight, height } = req.body;
+  const { id, name, age, gender, phone, blood_group, weight, height } = req.body;
   if (!id || !name || !age || !weight || !height) {
     return res.status(400).json({ error: 'Missing required profile values.' });
   }
 
-  const sql = `UPDATE users SET name = ?, age = ?, gender = ?, blood_group = ?, weight = ?, height = ? WHERE id = ?`;
-  db.run(sql, [name.trim(), age, gender, blood_group || 'O+', weight, height, id], function (err) {
+  const sql = `UPDATE users SET name = ?, phone = ?, age = ?, gender = ?, blood_group = ?, weight = ?, height = ? WHERE id = ?`;
+  db.run(sql, [name.trim(), phone ? phone.trim() : '', age, gender, blood_group || 'O+', weight, height, id], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     exportToExcelCSV();
     res.json({ success: true });
@@ -485,7 +484,6 @@ app.get('/', (req, res) => {
     .cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); position: absolute; bottom: 3px; }
     .cal-dot.partial { background: var(--accent-orange); }
 
-    /* SPACED FILTER PILLS CONTAINER */
     .filter-pills { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 22px; }
     .filter-pill {
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
@@ -553,6 +551,7 @@ app.get('/', (req, res) => {
     </linearGradient>
   </svg>
 
+  <!-- iOS INSTALL MODAL -->
   <div id="iosInstallModal" class="modal-backdrop" onclick="closeIosModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -595,9 +594,10 @@ app.get('/', (req, res) => {
         <button type="submit" class="btn-main">Log In</button>
       </form>
 
-      <form id="formRegister" style="display: none;" onsubmit="handleRegister(event)">
+      <form id="formRegister" style="display: none;" onsubmit="handleRegisterDirect(event)">
         <div class="input-group"><label class="input-label">Full Name</label><input type="text" id="regName" class="input-box" placeholder="e.g. Alex" required /></div>
         <div class="input-group"><label class="input-label">Email</label><input type="email" id="regEmail" class="input-box" placeholder="e.g. user@domain.com" required /></div>
+        <div class="input-group"><label class="input-label">Phone Number 📱</label><input type="tel" id="regPhone" class="input-box" placeholder="e.g. +91 9876543210" required /></div>
         <div class="input-group"><label class="input-label">Password</label><input type="password" id="regPassword" class="input-box" placeholder="Create password" required /></div>
         <div style="display: flex; gap: 10px;">
           <div class="input-group" style="flex:1;"><label class="input-label">Age</label><input type="number" id="regAge" class="input-box" placeholder="e.g. 24" required /></div>
@@ -620,7 +620,7 @@ app.get('/', (req, res) => {
           <div class="input-group" style="flex:1;"><label class="input-label">Weight (kg)</label><input type="number" id="regWeight" class="input-box" placeholder="e.g. 70" step="0.1" required /></div>
         </div>
         <div class="input-group"><label class="input-label">Height (cm)</label><input type="number" id="regHeight" class="input-box" placeholder="e.g. 175" required /></div>
-        <button type="submit" class="btn-main">Sign Up</button>
+        <button type="submit" class="btn-main">Create Account 🚀</button>
       </form>
     </div>
 
@@ -765,6 +765,10 @@ app.get('/', (req, res) => {
             <label class="input-label">Email (Read Only)</label>
             <input type="email" id="editEmail" class="input-box" disabled style="opacity: 0.5;" />
           </div>
+          <div class="input-group">
+            <label class="input-label">Phone Number 📱</label>
+            <input type="tel" id="editPhone" class="input-box" disabled required />
+          </div>
           <div style="display: flex; gap: 10px;">
             <div class="input-group" style="flex:1;">
               <label class="input-label">Age</label>
@@ -908,6 +912,7 @@ app.get('/', (req, res) => {
     let currentWorkoutCategory = 'chest_triceps';
     let isTrackingActive = false, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
     let isEditingProfile = false;
+
     const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
 
     const WORKOUT_MODULES = {
@@ -1012,7 +1017,7 @@ app.get('/', (req, res) => {
       const btn = document.getElementById('profileEditToggleBtn');
       const submitBtn = document.getElementById('profileSubmitBtn');
 
-      ['editName', 'editAge', 'editGender', 'editBloodGroup', 'editWeight', 'editHeight'].forEach(id => {
+      ['editName', 'editPhone', 'editAge', 'editGender', 'editBloodGroup', 'editWeight', 'editHeight'].forEach(id => {
         document.getElementById(id).disabled = !isEditingProfile;
       });
 
@@ -1319,11 +1324,12 @@ app.get('/', (req, res) => {
       syncActiveLogToDB();
     }
 
-    async function handleRegister(e) {
+    async function handleRegisterDirect(e) {
       e.preventDefault();
       const payload = {
         name: document.getElementById('regName').value,
         email: document.getElementById('regEmail').value,
+        phone: document.getElementById('regPhone').value,
         password: document.getElementById('regPassword').value,
         age: Number(document.getElementById('regAge').value),
         gender: document.getElementById('regGender').value,
@@ -1373,6 +1379,7 @@ app.get('/', (req, res) => {
     async function handleUpdateProfile(e) {
       e.preventDefault();
       const updatedName = document.getElementById('editName').value;
+      const updatedPhone = document.getElementById('editPhone').value;
       const updatedAge = Number(document.getElementById('editAge').value);
       const updatedGender = document.getElementById('editGender').value;
       const updatedBlood = document.getElementById('editBloodGroup').value;
@@ -1386,6 +1393,7 @@ app.get('/', (req, res) => {
           body: JSON.stringify({
             id: currentUser.id,
             name: updatedName,
+            phone: updatedPhone,
             age: updatedAge,
             gender: updatedGender,
             blood_group: updatedBlood,
@@ -1397,6 +1405,7 @@ app.get('/', (req, res) => {
         if (!res.ok) throw new Error(data.error);
 
         currentUser.name = updatedName;
+        currentUser.phone = updatedPhone;
         currentUser.age = updatedAge;
         currentUser.gender = updatedGender;
         currentUser.blood_group = updatedBlood;
@@ -1407,7 +1416,7 @@ app.get('/', (req, res) => {
         localStorage.setItem('apexfit_session', JSON.stringify(currentUser));
         toggleProfileEdit();
         loadDashboard();
-        alert('Profile & Blood Group updated!');
+        alert('Profile & Phone updated!');
       } catch (err) {
         alert(err.message);
       }
@@ -1457,6 +1466,7 @@ app.get('/', (req, res) => {
 
       document.getElementById('editName').value = currentUser.name;
       document.getElementById('editEmail').value = currentUser.email;
+      document.getElementById('editPhone').value = currentUser.phone || '';
       document.getElementById('editAge').value = currentUser.age;
       document.getElementById('editGender').value = currentUser.gender || 'male';
       document.getElementById('editBloodGroup').value = currentUser.blood_group || 'O+';
