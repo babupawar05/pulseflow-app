@@ -628,12 +628,11 @@ app.get('/', (req, res) => {
     }
 
     let currentUser = JSON.parse(localStorage.getItem('pulseflow_session')) || null;
-    let currentDietMode = 'veg'; // 'veg' or 'nonveg'
-    let selectedMealIndex = 0;   // 0: Breakfast, 1: Lunch, 2: Snack, 3: Dinner
+    let currentDietMode = 'veg';
+    let selectedMealIndex = 0;
     let isTrackingActive = false, gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
     const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
 
-    // --- MEAL DATABASE (CURATED INDIAN & BALANCED MACRO FOOD OPTIONS) ---
     const FOOD_DATABASE = {
       breakfast: {
         veg: [
@@ -765,16 +764,16 @@ app.get('/', (req, res) => {
       mealsContainer.innerHTML = '';
       currentUser.plan.meals.forEach((m, idx) => {
         const isActive = idx === selectedMealIndex;
-        mealsContainer.innerHTML += `
-          <div class="meal-box ${isActive ? 'active' : ''}" onclick="selectMealSlot(${idx})">
+        mealsContainer.innerHTML += \`
+          <div class="meal-box \${isActive ? 'active' : ''}" onclick="selectMealSlot(\${idx})">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-size: 1.3rem;">${m.icon}</span>
-              ${isActive ? '<span style="font-size:0.65rem; background:var(--accent-green); color:#000; font-weight:800; padding:2px 6px; border-radius:10px;">SELECTED</span>' : ''}
+              <span style="font-size: 1.3rem;">\${m.icon}</span>
+              \${isActive ? '<span style="font-size:0.65rem; background:var(--accent-green); color:#000; font-weight:800; padding:2px 6px; border-radius:10px;">SELECTED</span>' : ''}
             </div>
-            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight:700; margin-top:6px;">${m.name.toUpperCase()}</div>
-            <div style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-orange); font-size:1.1rem;">${m.cal} kcal</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight:700; margin-top:6px;">\${m.name.toUpperCase()}</div>
+            <div style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-orange); font-size:1.1rem;">\${m.cal} kcal</div>
           </div>
-        `;
+        \`;
       });
     }
 
@@ -782,28 +781,28 @@ app.get('/', (req, res) => {
       const meal = currentUser.plan.meals[selectedMealIndex];
       if (!meal) return;
 
-      document.getElementById('selectedMealTitle').innerText = `${meal.icon} ${meal.name} Recommendations (${currentDietMode === 'veg' ? 'Veg 🥦' : 'Non-Veg 🍗'})`;
-      document.getElementById('selectedMealCalorieTag').innerText = `Target: ~${meal.cal} kcal`;
+      document.getElementById('selectedMealTitle').innerText = meal.icon + ' ' + meal.name + ' Recommendations (' + (currentDietMode === 'veg' ? 'Veg 🥦' : 'Non-Veg 🍗') + ')';
+      document.getElementById('selectedMealCalorieTag').innerText = 'Target: ~' + meal.cal + ' kcal';
 
-      const foodItems = FOOD_DATABASE[meal.key][currentDietMode] || [];
+      const foodItems = (FOOD_DATABASE[meal.key] && FOOD_DATABASE[meal.key][currentDietMode]) || [];
       const foodContainer = document.getElementById('foodSuggestionsContainer');
       foodContainer.innerHTML = '';
 
       foodItems.forEach((food) => {
-        foodContainer.innerHTML += `
+        foodContainer.innerHTML += \`
           <div class="food-suggestion-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-              <b style="font-size:0.92rem; color:#fff; font-family:'Space Grotesk';">${food.name}</b>
-              <span style="font-family:'Space Grotesk'; color:var(--accent-orange); font-weight:700; font-size:0.9rem;">${food.cal} kcal</span>
+              <b style="font-size:0.92rem; color:#fff; font-family:'Space Grotesk';">\${food.name}</b>
+              <span style="font-family:'Space Grotesk'; color:var(--accent-orange); font-weight:700; font-size:0.9rem;">\${food.cal} kcal</span>
             </div>
-            <p style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 8px;">${food.desc}</p>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 8px;">\${food.desc}</p>
             <div style="display:flex; gap:8px;">
-              <span style="font-size:0.7rem; background:rgba(244,63,94,0.15); color:var(--accent-rose); padding:2px 8px; border-radius:6px; font-weight:700;">Protein: ${food.p}</span>
-              <span style="font-size:0.7rem; background:rgba(6,182,212,0.15); color:var(--accent-cyan); padding:2px 8px; border-radius:6px; font-weight:700;">Carbs: ${food.c}</span>
-              <span style="font-size:0.7rem; background:rgba(16,185,129,0.15); color:var(--accent-green); padding:2px 8px; border-radius:6px; font-weight:700;">Fats: ${food.f}</span>
+              <span style="font-size:0.7rem; background:rgba(244,63,94,0.15); color:var(--accent-rose); padding:2px 8px; border-radius:6px; font-weight:700;">Protein: \${food.p}</span>
+              <span style="font-size:0.7rem; background:rgba(6,182,212,0.15); color:var(--accent-cyan); padding:2px 8px; border-radius:6px; font-weight:700;">Carbs: \${food.c}</span>
+              <span style="font-size:0.7rem; background:rgba(16,185,129,0.15); color:var(--accent-green); padding:2px 8px; border-radius:6px; font-weight:700;">Fats: \${food.f}</span>
             </div>
           </div>
-        `;
+        \`;
       });
     }
 
@@ -919,23 +918,22 @@ app.get('/', (req, res) => {
       const tipContainer = document.getElementById('customTipsContainer');
       tipContainer.innerHTML = '';
       currentUser.plan.tips.forEach(t => {
-        tipContainer.innerHTML += `
-          <div class="tip-item"><span style="font-size:1.2rem;">${t.icon}</span><div><b style="color: #fff;">${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">${t.text}</div></div></div>
-        `;
+        tipContainer.innerHTML += \`
+          <div class="tip-item"><span style="font-size:1.2rem;">\${t.icon}</span><div><b style="color: #fff;">\${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">\${t.text}</div></div></div>
+        \`;
       });
 
       const workoutContainer = document.getElementById('workoutList');
       workoutContainer.innerHTML = '';
       currentUser.plan.workouts.forEach((w, idx) => {
         const isDone = currentUser.completedWorkouts && currentUser.completedWorkouts.includes(idx);
-        workoutContainer.innerHTML += `
-          <div class="routine-row ${isDone ? 'done' : ''}" onclick="toggleWorkout(${idx})">
-            <span>${w}</span><span>${isDone ? '✅' : '⚪'}</span>
+        workoutContainer.innerHTML += \`
+          <div class="routine-row \${isDone ? 'done' : ''}" onclick="toggleWorkout(\${idx})">
+            <span>\${w}</span><span>\${isDone ? '✅' : '⚪'}</span>
           </div>
-        `;
+        \`;
       });
 
-      // Populate Edit Profile inputs
       document.getElementById('editName').value = currentUser.name;
       document.getElementById('editEmail').value = currentUser.email;
       document.getElementById('editAge').value = currentUser.age;
