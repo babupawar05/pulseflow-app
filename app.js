@@ -14,32 +14,57 @@ app.use(express.json());
 const dbPath = path.join(__dirname, 'fitness.db');
 const csvPath = path.join(__dirname, 'fitness_records.csv');
 
-// --- 1. REAL-TIME EXCEL / CSV DISK SYNC ---
+// --- 1. REAL-TIME EXCEL / CSV DISK SYNC (DAILY LOGS + PROFILES) ---
 function exportToExcelCSV() {
-  const query = `SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users`;
+  const query = `
+    SELECT 
+      u.id AS user_id, u.name, u.email, u.age, u.gender, u.blood_group, u.weight, u.height,
+      COALESCE(d.date, DATE('now', 'localtime')) AS log_date,
+      COALESCE(d.steps, 0) AS daily_steps,
+      COALESCE(d.distance_km, 0) AS daily_km,
+      COALESCE(d.calories, 0) AS daily_calories,
+      COALESCE(d.active_minutes, 0) AS daily_active_mins,
+      COALESCE(d.sleep_hours, 7.5) AS daily_sleep,
+      COALESCE(d.completedWorkouts, '[]') AS daily_workouts,
+      u.created_at
+    FROM users u
+    LEFT JOIN daily_logs d ON u.id = d.user_id
+    ORDER BY u.id ASC, d.date DESC
+  `;
+
   db.all(query, [], (err, rows) => {
     if (err) return console.error('CSV Export Error:', err.message);
 
-    const headers = ['User ID', 'Full Name', 'Email', 'Age', 'Gender', 'Weight (kg)', 'Height (cm)', 'Total Steps', 'Water (L)', 'Completed Workouts', 'Registered At'];
+    const headers = [
+      'User ID', 'Full Name', 'Email', 'Age', 'Gender', 'Blood Group', 'Weight (kg)', 'Height (cm)',
+      'Log Date (YYYY-MM-DD)', 'Steps Count', 'Distance (km)', 'Calories (kcal)', 'Active Minutes',
+      'Sleep (hrs)', 'Completed Workouts', 'Registered At'
+    ];
     const csvRows = [headers.join(',')];
 
     (rows || []).forEach(r => {
       let workouts = '';
-      try { workouts = JSON.parse(r.completedWorkouts || '[]').join('; '); } catch (e) { workouts = ''; }
+      try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
       const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
       const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanBlood = `"${r.blood_group || 'O+'}"`;
       const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
 
       csvRows.push([
-        r.id,
+        r.user_id,
         cleanName,
         cleanEmail,
         r.age,
         r.gender,
+        cleanBlood,
         r.weight,
         r.height,
-        r.steps,
-        r.water,
+        `"${r.log_date}"`,
+        r.daily_steps,
+        r.daily_km,
+        r.daily_calories,
+        r.daily_active_mins,
+        r.daily_sleep,
         cleanWorkouts,
         `"${r.created_at}"`
       ].join(','));
@@ -47,7 +72,7 @@ function exportToExcelCSV() {
 
     try {
       fs.writeFileSync(csvPath, csvRows.join('\r\n'), 'utf8');
-      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} records)`);
+      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} daily records)`);
     } catch (writeErr) {
       console.error('File write error:', writeErr.message);
     }
@@ -72,12 +97,27 @@ db.serialize(() => {
       name TEXT,
       age INTEGER,
       gender TEXT,
+      blood_group TEXT DEFAULT 'O+',
       weight REAL,
       height REAL,
-      steps INTEGER DEFAULT 0,
-      water REAL DEFAULT 0.0,
-      completedWorkouts TEXT DEFAULT '[]',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS daily_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      steps INTEGER DEFAULT 0,
+      distance_km REAL DEFAULT 0,
+      calories INTEGER DEFAULT 0,
+      active_minutes INTEGER DEFAULT 0,
+      sleep_hours REAL DEFAULT 7.5,
+      completedWorkouts TEXT DEFAULT '[]',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, date),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `, () => {
     exportToExcelCSV();
@@ -106,7 +146,7 @@ app.get('/manifest.json', (req, res) => {
   res.json({
     name: "PulseFlow Fitness OS",
     short_name: "PulseFlow",
-    description: "Personal Biometric Fitness Tracker & OS",
+    description: "Daily Calendar Fitness Tracking & Health OS",
     start_url: "/",
     display: "standalone",
     background_color: "#070913",
@@ -126,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v3';
+    const CACHE_NAME = 'pulseflow-v6';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -145,23 +185,50 @@ app.get('/sw.js', (req, res) => {
       if (event.request.url.includes('/api/')) return;
       event.respondWith(caches.match(event.request).then((resp) => resp || fetch(event.request)));
     });
+
+    self.addEventListener('notificationclick', (event) => {
+      event.notification.close();
+      event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+          if (windowClients.length > 0) return windowClients[0].focus();
+          return clients.openWindow('/');
+        })
+      );
+    });
   `);
 });
 
 // --- 4. BACKEND API ROUTES ---
+
 app.get('/api/export-excel', (req, res) => {
-  const query = `SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users`;
+  const query = `
+    SELECT 
+      u.id AS user_id, u.name, u.email, u.age, u.gender, u.blood_group, u.weight, u.height,
+      COALESCE(d.date, DATE('now', 'localtime')) AS log_date,
+      COALESCE(d.steps, 0) AS daily_steps,
+      COALESCE(d.distance_km, 0) AS daily_km,
+      COALESCE(d.calories, 0) AS daily_calories,
+      COALESCE(d.active_minutes, 0) AS daily_active_mins,
+      COALESCE(d.sleep_hours, 7.5) AS daily_sleep,
+      COALESCE(d.completedWorkouts, '[]') AS daily_workouts,
+      u.created_at
+    FROM users u
+    LEFT JOIN daily_logs d ON u.id = d.user_id
+    ORDER BY u.id ASC, d.date DESC
+  `;
+
   db.all(query, [], (err, rows) => {
     if (err) return res.status(500).send('Database read error: ' + err.message);
 
-    const headers = 'User ID,Full Name,Email,Age,Gender,Weight (kg),Height (cm),Total Steps,Water (L),Completed Workouts,Registered At\r\n';
+    const headers = 'User ID,Full Name,Email,Age,Gender,Blood Group,Weight (kg),Height (cm),Log Date (YYYY-MM-DD),Steps Count,Distance (km),Calories (kcal),Active Minutes,Sleep (hrs),Completed Workouts,Registered At\r\n';
     const body = (rows || []).map(r => {
       let workouts = '';
-      try { workouts = JSON.parse(r.completedWorkouts || '[]').join('; '); } catch (e) { workouts = ''; }
+      try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
       const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
       const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanBlood = `"${r.blood_group || 'O+'}"`;
       const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
-      return `${r.id},${cleanName},${cleanEmail},${r.age},${r.gender},${r.weight},${r.height},${r.steps},${r.water},${cleanWorkouts},"${r.created_at}"`;
+      return `${r.user_id},${cleanName},${cleanEmail},${r.age},${r.gender},${cleanBlood},${r.weight},${r.height},"${r.log_date}",${r.daily_steps},${r.daily_km},${r.daily_calories},${r.daily_active_mins},${r.daily_sleep},${cleanWorkouts},"${r.created_at}"`;
     }).join('\r\n');
 
     res.setHeader('Content-Type', 'text/csv');
@@ -171,23 +238,23 @@ app.get('/api/export-excel', (req, res) => {
 });
 
 app.get('/api/users', (req, res) => {
-  db.all('SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users', [], (err, rows) => {
+  db.all('SELECT id, name, email, age, gender, blood_group, weight, height, created_at FROM users', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
 app.post('/api/register', async (req, res) => {
-  const { email, password, name, age, gender, weight, height } = req.body;
+  const { email, password, name, age, gender, blood_group, weight, height } = req.body;
   if (!email || !password || !name || !age || !weight || !height) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const sql = `INSERT INTO users (email, password, name, age, gender, weight, height) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    const sql = `INSERT INTO users (email, password, name, age, gender, blood_group, weight, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
     
-    db.run(sql, [email.toLowerCase().trim(), hashedPassword, name.trim(), age, gender, weight, height], function (err) {
+    db.run(sql, [email.toLowerCase().trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
           return res.status(400).json({ error: 'An account with this email already exists.' });
@@ -216,31 +283,62 @@ app.post('/api/login', (req, res) => {
 
     const safeUser = { ...user };
     delete safeUser.password;
-    try { safeUser.completedWorkouts = JSON.parse(safeUser.completedWorkouts || '[]'); } catch (e) { safeUser.completedWorkouts = []; }
     res.json({ success: true, user: safeUser });
   });
 });
 
 app.post('/api/update-profile', (req, res) => {
-  const { id, name, age, gender, weight, height } = req.body;
+  const { id, name, age, gender, blood_group, weight, height } = req.body;
   if (!id || !name || !age || !weight || !height) {
     return res.status(400).json({ error: 'Missing required profile values.' });
   }
 
-  const sql = `UPDATE users SET name = ?, age = ?, gender = ?, weight = ?, height = ? WHERE id = ?`;
-  db.run(sql, [name.trim(), age, gender, weight, height, id], function (err) {
+  const sql = `UPDATE users SET name = ?, age = ?, gender = ?, blood_group = ?, weight = ?, height = ? WHERE id = ?`;
+  db.run(sql, [name.trim(), age, gender, blood_group || 'O+', weight, height, id], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     exportToExcelCSV();
     res.json({ success: true });
   });
 });
 
-app.post('/api/sync', (req, res) => {
-  const { id, steps, water, completedWorkouts } = req.body;
-  if (!id) return res.status(400).json({ error: 'User ID missing.' });
+// Fetch all historical logs for a user (Calendar View)
+app.get('/api/daily-logs/:userId', (req, res) => {
+  const userId = req.params.userId;
+  const sql = `SELECT * FROM daily_logs WHERE user_id = ? ORDER BY date DESC`;
+  db.all(sql, [userId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+});
 
-  const sql = `UPDATE users SET steps = ?, water = ?, completedWorkouts = ? WHERE id = ?`;
-  db.run(sql, [steps, water, JSON.stringify(completedWorkouts || []), id], function (err) {
+// Upsert daily tracking data on a specific date (YYYY-MM-DD)
+app.post('/api/daily-log/sync', (req, res) => {
+  const { userId, date, steps, distance_km, calories, active_minutes, sleep_hours, completedWorkouts } = req.body;
+  if (!userId || !date) return res.status(400).json({ error: 'Missing userId or date.' });
+
+  const sql = `
+    INSERT INTO daily_logs (user_id, date, steps, distance_km, calories, active_minutes, sleep_hours, completedWorkouts, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, date) DO UPDATE SET
+      steps = excluded.steps,
+      distance_km = excluded.distance_km,
+      calories = excluded.calories,
+      active_minutes = excluded.active_minutes,
+      sleep_hours = excluded.sleep_hours,
+      completedWorkouts = excluded.completedWorkouts,
+      updated_at = CURRENT_TIMESTAMP
+  `;
+
+  db.run(sql, [
+    userId,
+    date,
+    steps || 0,
+    distance_km || 0,
+    calories || 0,
+    active_minutes || 0,
+    sleep_hours || 7.5,
+    JSON.stringify(completedWorkouts || [])
+  ], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     exportToExcelCSV();
     res.json({ success: true });
@@ -299,7 +397,7 @@ app.get('/', (req, res) => {
     }
     .nav-actions { display: flex; gap: 6px; align-items: center; }
     .pwa-btn {
-      display: none; background: linear-gradient(45deg, var(--accent-cyan), var(--accent-green));
+      display: inline-block; background: linear-gradient(45deg, var(--accent-cyan), var(--accent-green));
       color: #02120b; border: none; font-size: 0.72rem; font-weight: 800;
       padding: 5px 12px; border-radius: 20px; cursor: pointer;
     }
@@ -359,12 +457,37 @@ app.get('/', (req, res) => {
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .metric-card { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06); border-radius: 18px; padding: 14px; }
-    .meal-box {
-      cursor: pointer; transition: all 0.25s ease; border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 18px; padding: 14px; background: rgba(0,0,0,0.3);
+    
+    /* CALENDAR WIDGET STYLES */
+    .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .calendar-nav-btn { background: rgba(255,255,255,0.08); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: 800; }
+    .calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; }
+    .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .cal-day {
+      aspect-ratio: 1; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 0.8rem;
+      cursor: pointer; position: relative; transition: all 0.2s;
     }
-    .meal-box:hover { transform: translateY(-2px); border-color: var(--accent-cyan); background: rgba(6, 182, 212, 0.08); }
-    .meal-box.active { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.12); }
+    .cal-day:hover { border-color: var(--accent-cyan); background: rgba(6,182,212,0.1); }
+    .cal-day.active-day { border-color: var(--accent-cyan); background: rgba(6,182,212,0.2); font-weight: 800; }
+    .cal-day.today { border: 1px solid var(--accent-green); }
+    .cal-day.empty { background: transparent; border: none; cursor: default; }
+    .cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); position: absolute; bottom: 3px; }
+    .cal-dot.partial { background: var(--accent-orange); }
+
+    .filter-pills { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 12px; }
+    .filter-pill {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      color: var(--text-muted); font-size: 0.75rem; font-weight: 700; padding: 6px 14px;
+      border-radius: 20px; cursor: pointer; white-space: nowrap;
+    }
+    .filter-pill.active { background: var(--accent-cyan); color: #02120b; border-color: var(--accent-cyan); }
+    .workout-card {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 18px; padding: 14px; margin-bottom: 10px; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .workout-card.done { opacity: 0.45; text-decoration: line-through; border-color: var(--accent-green); }
     .diet-toggle { display: flex; background: rgba(0,0,0,0.5); border-radius: 20px; padding: 3px; gap: 4px; margin-bottom: 14px; }
     .diet-btn {
       flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-muted);
@@ -376,24 +499,12 @@ app.get('/', (req, res) => {
       background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
       border-radius: 16px; padding: 12px 14px; margin-top: 10px;
     }
-    .progress-track { width: 100%; height: 7px; background: rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden; margin: 8px 0; }
-    .progress-fill { height: 100%; width: 0%; transition: width 0.4s ease; }
-    .chip-btn {
-      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
-      padding: 10px 14px; border-radius: 14px; font-size: 0.82rem; font-weight: 700;
-      cursor: pointer; color: #fff; flex: 1; text-align: center;
+    .meal-box {
+      cursor: pointer; transition: all 0.25s ease; border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px; padding: 14px; background: rgba(0,0,0,0.3);
     }
-    .tip-item {
-      display: flex; align-items: flex-start; gap: 12px; padding: 12px;
-      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
-      border-radius: 14px; margin-bottom: 8px; font-size: 0.85rem; line-height: 1.4;
-    }
-    .routine-row {
-      display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
-      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 14px; margin-top: 8px; font-size: 0.88rem; cursor: pointer;
-    }
-    .routine-row.done { text-decoration: line-through; opacity: 0.45; border-color: var(--accent-green); }
+    .meal-box:hover { transform: translateY(-2px); border-color: var(--accent-cyan); }
+    .meal-box.active { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.12); }
     .tab-bar {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
       width: calc(100% - 24px); max-width: 600px; background: rgba(13, 17, 30, 0.94);
@@ -409,6 +520,18 @@ app.get('/', (req, res) => {
     .tab-btn.active { color: #fff; background: rgba(255,255,255,0.1); }
     .tab-page { display: none; flex-direction: column; gap: 14px; }
     .tab-page.active { display: flex; }
+
+    .modal-backdrop {
+      display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); z-index: 9999;
+      justify-content: center; align-items: flex-end; padding: 20px;
+    }
+    .modal-content {
+      background: #0f1526; border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 28px; width: 100%; max-width: 480px; padding: 24px;
+      display: flex; flex-direction: column; gap: 16px; animation: slideUp 0.3s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
   </style>
 </head>
 <body>
@@ -417,6 +540,25 @@ app.get('/', (req, res) => {
       <stop offset="0%" stop-color="#10b981" /><stop offset="100%" stop-color="#06b6d4" />
     </linearGradient>
   </svg>
+
+  <div id="iosInstallModal" class="modal-backdrop" onclick="closeIosModal()">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <b style="font-family: 'Space Grotesk'; font-size: 1.15rem; color: #fff;">Install on Apple iPhone / iPad</b>
+        <button onclick="closeIosModal()" style="background: rgba(255,255,255,0.1); border:none; color:#fff; border-radius:50%; width:28px; height:28px; cursor:pointer;">✕</button>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">Add PulseFlow to your iPhone home screen in 2 quick steps:</p>
+      <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.04); padding:12px; border-radius:14px;">
+        <span style="font-size:1.4rem;">1️⃣</span>
+        <div style="font-size:0.85rem;">Tap the <b>Share button</b> (<span style="color:var(--accent-cyan);">⎋ or ⍗</span>) in Safari toolbar.</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.04); padding:12px; border-radius:14px;">
+        <span style="font-size:1.4rem;">2️⃣</span>
+        <div style="font-size:0.85rem;">Scroll down and tap <b>'Add to Home Screen'</b> (➕).</div>
+      </div>
+      <button class="btn-main" onclick="closeIosModal()" style="margin-top:4px;">Got It 👍</button>
+    </div>
+  </div>
 
   <div class="app-container">
     <div class="nav-bar">
@@ -450,20 +592,38 @@ app.get('/', (req, res) => {
           <div class="input-group" style="flex:1;"><label class="input-label">Gender</label><select id="regGender" class="input-box"><option value="male">Male</option><option value="female">Female</option></select></div>
         </div>
         <div style="display: flex; gap: 10px;">
+          <div class="input-group" style="flex:1;">
+            <label class="input-label">Blood Group 🩸</label>
+            <select id="regBloodGroup" class="input-box">
+              <option value="O+">O Positive (O+)</option>
+              <option value="O-">O Negative (O-)</option>
+              <option value="A+">A Positive (A+)</option>
+              <option value="A-">A Negative (A-)</option>
+              <option value="B+">B Positive (B+)</option>
+              <option value="B-">B Negative (B-)</option>
+              <option value="AB+">AB Positive (AB+)</option>
+              <option value="AB-">AB Negative (AB-)</option>
+            </select>
+          </div>
           <div class="input-group" style="flex:1;"><label class="input-label">Weight (kg)</label><input type="number" id="regWeight" class="input-box" placeholder="e.g. 70" step="0.1" required /></div>
-          <div class="input-group" style="flex:1;"><label class="input-label">Height (cm)</label><input type="number" id="regHeight" class="input-box" placeholder="e.g. 175" required /></div>
         </div>
+        <div class="input-group"><label class="input-label">Height (cm)</label><input type="number" id="regHeight" class="input-box" placeholder="e.g. 175" required /></div>
         <button type="submit" class="btn-main">Sign Up</button>
       </form>
     </div>
 
-    <!-- TAB 1: ACTIVITY -->
+    <!-- TAB 1: DAILY & CALENDAR TRACKER -->
     <div id="tab-activity" class="tab-page">
+      
+      <!-- Date Selector & Ring Card -->
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div>
-            <h2 id="userName" style="font-family: 'Space Grotesk'; font-size: 1.4rem;">Hi</h2>
-            <span id="userPlanCategory" style="color: var(--accent-cyan); font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">--</span>
+            <h2 id="userName" style="font-family: 'Space Grotesk'; font-size: 1.35rem;">Hi</h2>
+            <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+              <span id="selectedDateLabel" style="color: var(--accent-cyan); font-size: 0.8rem; font-weight: 800; text-transform: uppercase;">TODAY (2026-08-27)</span>
+              <span id="isPastBadge" style="display:none; font-size:0.65rem; background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:8px; color:var(--text-muted);">HISTORICAL</span>
+            </div>
           </div>
           <button style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--accent-rose); padding: 4px 10px; border-radius: 12px; font-size: 0.72rem; cursor: pointer;" onclick="logout()">Log Out</button>
         </div>
@@ -482,17 +642,40 @@ app.get('/', (req, res) => {
         </div>
       </div>
 
+      <!-- INTERACTIVE MONTHLY CALENDAR -->
       <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: baseline;">
-          <span class="section-title" style="margin-bottom: 0;">💧 Hydration</span>
-          <b id="waterValQuick" style="color: var(--accent-cyan); font-family: 'Space Grotesk';">0.0L / --L</b>
+        <div class="calendar-header">
+          <button class="calendar-nav-btn" onclick="prevMonth()">‹</button>
+          <b id="calendarMonthYear" style="font-family:'Space Grotesk'; font-size:1.05rem;">August 2026</b>
+          <button class="calendar-nav-btn" onclick="nextMonth()">›</button>
         </div>
-        <div class="progress-track" style="margin: 10px 0;"><div id="waterBarQuick" class="progress-fill" style="background: var(--accent-cyan);"></div></div>
-        <div style="display: flex; gap: 8px;"><button class="chip-btn" onclick="addWater(0.25)">+250ml 💧</button><button class="chip-btn" onclick="addWater(0.50)">+500ml 🌊</button></div>
+        <div class="calendar-weekdays">
+          <div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div>
+        </div>
+        <div id="calendarGrid" class="calendar-grid"></div>
+        <p style="font-size:0.72rem; color:var(--text-muted); margin-top:10px; text-align:center;">🟢 Completed Target • 🟠 Logged Progress • Tap any day to inspect</p>
+      </div>
+
+      <!-- RECOVERY METRICS -->
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="section-title" style="margin-bottom: 0;">🌙 Daily Recovery State</span>
+          <span id="recoveryScoreBadge" style="font-family:'Space Grotesk'; font-weight:800; background:rgba(16,185,129,0.15); color:var(--accent-green); padding:3px 10px; border-radius:20px; font-size:0.75rem;">OPTIMAL</span>
+        </div>
+        <div class="grid-2" style="margin-top: 10px;">
+          <div class="metric-card">
+            <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">Sleep Logged</span>
+            <div id="dispSleep" style="color:var(--accent-purple); font-family:'Space Grotesk'; font-weight:700; font-size:1.2rem; margin-top:2px;">7.5 hrs</div>
+          </div>
+          <div class="metric-card">
+            <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">Hourly Hydration Ping</span>
+            <div style="color:var(--accent-cyan); font-family:'Space Grotesk'; font-weight:700; font-size:1.0rem; margin-top:2px;">Active (Next: <span id="nextReminderTime" style="color:#fff;">--:--</span>)</div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- TAB 2: NUTRITION & MEAL SUGGESTIONS -->
+    <!-- TAB 2: NUTRITION & MEAL EXPLORER -->
     <div id="tab-nutrition" class="tab-page">
       <div class="card">
         <div class="section-title">🥗 Daily Energy Blueprint</div>
@@ -506,12 +689,7 @@ app.get('/', (req, res) => {
       </div>
 
       <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div class="section-title" style="margin-bottom: 0;">🍽️ Smart Meal Explorer</div>
-        </div>
-        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Click on any meal slot below to see recommended food combinations tailored to your daily target:</p>
-        
-        <!-- Veg / Non-Veg Switcher -->
+        <div class="section-title">🍽️ Smart Meal Explorer</div>
         <div class="diet-toggle">
           <button id="dietBtnVeg" class="diet-btn active" onclick="setDietPreference('veg')">🥦 Vegetarian Options</button>
           <button id="dietBtnNonVeg" class="diet-btn" onclick="setDietPreference('nonveg')">🍗 Non-Vegetarian Options</button>
@@ -519,7 +697,6 @@ app.get('/', (req, res) => {
 
         <div class="grid-4" id="mealsContainer"></div>
 
-        <!-- Selected Meal Deep Dive Panel -->
         <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 14px;">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <b id="selectedMealTitle" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--accent-cyan);">Breakfast Breakdown</b>
@@ -532,27 +709,38 @@ app.get('/', (req, res) => {
 
     <!-- TAB 3: WORKOUTS -->
     <div id="tab-workouts" class="tab-page">
-      <div class="card"><div class="section-title">🏋️ Prescribed Training Split</div><div id="workoutList"></div></div>
+      <div class="card">
+        <div class="section-title">🏋️ Progressive Training Modules</div>
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Logged against active date: <b id="workoutDateContext" style="color:var(--accent-cyan);">Today</b></p>
+        
+        <div class="filter-pills">
+          <button class="filter-pill active" onclick="setWorkoutCategory('chest_triceps')">💥 Chest & Triceps</button>
+          <button class="filter-pill" onclick="setWorkoutCategory('back_biceps')">🦅 Back & Biceps</button>
+          <button class="filter-pill" onclick="setWorkoutCategory('legs_core')">🦵 Legs & Core</button>
+          <button class="filter-pill" onclick="setWorkoutCategory('cardio_hiit')">🔥 Cardio & HIIT</button>
+        </div>
+
+        <div id="workoutList"></div>
+      </div>
     </div>
 
     <!-- TAB 4: BIO HEALTH -->
     <div id="tab-health" class="tab-page">
       <div class="card">
         <div class="section-title">🧬 Biometric Diagnostics</div>
-        <div class="grid-2">
+        <div class="grid-3">
           <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Current BMI</span><div id="bioBMI" style="font-family:'Space Grotesk'; font-size: 1.4rem; font-weight: 700; color: var(--accent-cyan); margin-top: 2px;">--</div></div>
-          <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Ideal Weight Range</span><div id="bioIdealWeight" style="font-family:'Space Grotesk'; font-size: 1.2rem; font-weight: 700; color: var(--accent-green); margin-top: 2px;">-- kg</div></div>
+          <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Blood Type</span><div id="bioBlood" style="font-family:'Space Grotesk'; font-size: 1.4rem; font-weight: 700; color: var(--accent-rose); margin-top: 2px;">O+</div></div>
+          <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Ideal Weight</span><div id="bioIdealWeight" style="font-family:'Space Grotesk'; font-size: 1.1rem; font-weight: 700; color: var(--accent-green); margin-top: 2px;">-- kg</div></div>
         </div>
       </div>
-      <div class="card"><div class="section-title">🎯 Targeted Body Protocols</div><div id="customTipsContainer"></div></div>
+      <div class="card"><div class="section-title">🎯 Targeted Protocols</div><div id="customTipsContainer"></div></div>
     </div>
 
     <!-- TAB 5: EDIT PROFILE -->
     <div id="tab-profile" class="tab-page">
       <div class="card">
         <div class="section-title">👤 Manage Profile & Biometrics</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Update your metrics below. PulseFlow will immediately adjust your calorie goals, macros, hydration targets, and BMI.</p>
-        
         <form id="formEditProfile" onsubmit="handleUpdateProfile(event)">
           <div class="input-group">
             <label class="input-label">Full Name</label>
@@ -577,13 +765,26 @@ app.get('/', (req, res) => {
           </div>
           <div style="display: flex; gap: 10px;">
             <div class="input-group" style="flex:1;">
+              <label class="input-label">Blood Group 🩸</label>
+              <select id="editBloodGroup" class="input-box">
+                <option value="O+">O Positive (O+)</option>
+                <option value="O-">O Negative (O-)</option>
+                <option value="A+">A Positive (A+)</option>
+                <option value="A-">A Negative (A-)</option>
+                <option value="B+">B Positive (B+)</option>
+                <option value="B-">B Negative (B-)</option>
+                <option value="AB+">AB Positive (AB+)</option>
+                <option value="AB-">AB Negative (AB-)</option>
+              </select>
+            </div>
+            <div class="input-group" style="flex:1;">
               <label class="input-label">Weight (kg)</label>
               <input type="number" id="editWeight" class="input-box" step="0.1" required />
             </div>
-            <div class="input-group" style="flex:1;">
-              <label class="input-label">Height (cm)</label>
-              <input type="number" id="editHeight" class="input-box" required />
-            </div>
+          </div>
+          <div class="input-group">
+            <label class="input-label">Height (cm)</label>
+            <input type="number" id="editHeight" class="input-box" required />
           </div>
           <button type="submit" class="btn-main">Update Profile ✨</button>
         </form>
@@ -601,8 +802,11 @@ app.get('/', (req, res) => {
   </div>
 
   <script>
-    let deferredPrompt;
+    let deferredPrompt = null;
     const installBtn = document.getElementById('pwaInstallBtn');
+
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if (isStandalone && installBtn) installBtn.style.display = 'none';
 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -613,25 +817,102 @@ app.get('/', (req, res) => {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferredPrompt = e;
-      if (installBtn) installBtn.style.display = 'inline-block';
     });
 
-    function triggerPWAInstall() {
-      if (!deferredPrompt) return;
-      deferredPrompt.prompt();
-      deferredPrompt.userChoice.then((choiceResult) => {
-        if (choiceResult.outcome === 'accepted') {
-          installBtn.style.display = 'none';
-        }
-        deferredPrompt = null;
-      });
+    function isIos() {
+      const userAgent = window.navigator.userAgent.toLowerCase();
+      return /iphone|ipad|ipod/.test(userAgent);
     }
 
+    function triggerPWAInstall() {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+          if (choiceResult.outcome === 'accepted' && installBtn) installBtn.style.display = 'none';
+          deferredPrompt = null;
+        });
+      } else if (isIos()) {
+        document.getElementById('iosInstallModal').style.display = 'flex';
+      } else {
+        alert("To install PulseFlow: Click your browser's menu (top right) and select 'Install PulseFlow' or 'Add to Home Screen'.");
+      }
+    }
+
+    function closeIosModal() {
+      document.getElementById('iosInstallModal').style.display = 'none';
+    }
+
+    function setupHourlyHydrationNotifier() {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+
+      function updateNextPing() {
+        const next = new Date(Date.now() + 60 * 60 * 1000);
+        const timeStr = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const el = document.getElementById('nextReminderTime');
+        if (el) el.innerText = timeStr;
+      }
+      updateNextPing();
+
+      setInterval(() => {
+        updateNextPing();
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification("💧 Hydration & Recovery Reminder", {
+            body: "Time for your 250ml glass of water! Keep your cellular recovery high.",
+            icon: "/icon.svg"
+          });
+        }
+      }, 3600000);
+    }
+
+    function getTodayDateString() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + d;
+    }
+
+    // --- APPLICATION STATE ---
     let currentUser = JSON.parse(localStorage.getItem('pulseflow_session')) || null;
+    let todayDateStr = getTodayDateString();
+    let selectedDateStr = todayDateStr;
+    let currentCalMonth = new Date().getMonth();
+    let currentCalYear = new Date().getFullYear();
+    let userDailyLogs = {}; // Map of "YYYY-MM-DD" -> log record
+
     let currentDietMode = 'veg';
     let selectedMealIndex = 0;
+    let currentWorkoutCategory = 'chest_triceps';
     let isTrackingActive = false, gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
     const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
+
+    const WORKOUT_MODULES = {
+      chest_triceps: [
+        { name: "Flat Barbell Bench Press", sets: "4 Sets", reps: "8-10 Reps", rest: "90s Rest", focus: "Pectoralis Major & Core Stability" },
+        { name: "Incline Dumbbell Press", sets: "3 Sets", reps: "10-12 Reps", rest: "75s Rest", focus: "Upper Chest Clavicular Head" },
+        { name: "Cable Chest Flyes / Pec Deck", sets: "3 Sets", reps: "12-15 Reps", rest: "60s Rest", focus: "Inner Chest Hypertrophy" },
+        { name: "Overhead Rope Tricep Extension", sets: "3 Sets", reps: "12-15 Reps", rest: "60s Rest", focus: "Tricep Long Head Extension" }
+      ],
+      back_biceps: [
+        { name: "Barbell Deadlifts / Rack Pulls", sets: "4 Sets", reps: "6-8 Reps", rest: "120s Rest", focus: "Posterior Chain & Erector Spinae" },
+        { name: "Lat Pulldowns (Wide Grip)", sets: "4 Sets", reps: "10-12 Reps", rest: "75s Rest", focus: "Latissimus Dorsi Width" },
+        { name: "Seated Cable Rows", sets: "3 Sets", reps: "12 Reps", rest: "60s Rest", focus: "Mid-Back & Rhomboids Density" },
+        { name: "Incline Dumbbell Bicep Curls", sets: "3 Sets", reps: "12 Reps", rest: "60s Rest", focus: "Bicep Peak Hypertrophy" }
+      ],
+      legs_core: [
+        { name: "Barbell Back Squats", sets: "4 Sets", reps: "8-10 Reps", rest: "90s Rest", focus: "Quadriceps & Glute Drive" },
+        { name: "Romanian Deadlifts (RDL)", sets: "3 Sets", reps: "10-12 Reps", rest: "75s Rest", focus: "Hamstrings & Lower Back Stretch" },
+        { name: "Bulgarian Split Squats", sets: "3 Sets", reps: "10 Reps/Leg", rest: "60s Rest", focus: "Unilateral Leg Strength" },
+        { name: "Hanging Leg Raises + Plank", sets: "3 Sets", reps: "15 Reps + 45s", rest: "45s Rest", focus: "Rectus Abdominis Compression" }
+      ],
+      cardio_hiit: [
+        { name: "Zone 2 Incline Treadmill Walk", sets: "1 Bout", reps: "25-30 Mins", rest: "Steady Pace", focus: "Fat Oxidation & Aerobic Base" },
+        { name: "HIIT Sprint Intervals", sets: "8 Rounds", reps: "30s Sprint / 30s Walk", rest: "30s Active", focus: "VO2 Max Elevation" },
+        { name: "Assault Bike / Rowing Ergometer", sets: "4 Rounds", reps: "250m Fast Pace", rest: "60s Rest", focus: "Full Body Glycolytic Burn" }
+      ]
+    };
 
     const FOOD_DATABASE = {
       breakfast: {
@@ -648,7 +929,7 @@ app.get('/', (req, res) => {
       },
       lunch: {
         veg: [
-          { name: "Paneer Curry (150g) + 2 Rotis + Dal Bowl", cal: 560, p: "28g", c: "62g", f: "18g", desc: "Fresh cottage cheese cooked in light tomato gravy with tadka dal & cucumber salad." },
+          { name: "Paneer Curry (150g) + 2 Rotis + Dal Bowl", cal: 560, p: "28g", c: "62g", f: "18g", desc: "Fresh cottage cheese cooked in light tomato gravy with tadka dal & salad." },
           { name: "Rajma (Kidney Beans) / Chole + Brown Rice", cal: 520, p: "20g", c: "78g", f: "9g", desc: "Pressure cooked legumes rich in fiber with a generous bowl of brown rice." },
           { name: "Soya Chunks Curry + Curd (Dahi) + 2 Rotis", cal: 490, p: "36g", c: "55g", f: "8g", desc: "High biological value vegetarian protein with cooling curd." }
         ],
@@ -709,26 +990,23 @@ app.get('/', (req, res) => {
       const minIdealWeight = (18.5 * hM * hM).toFixed(1);
       const maxIdealWeight = (24.9 * hM * hM).toFixed(1);
 
-      let category = 'Normal Weight', targetSteps = 9000, targetWater = 2.8, targetCalories = tdee;
+      let category = 'Normal Weight', targetSteps = 9000, targetCalories = tdee;
       let proteinG = Math.round(weight * 1.8), fatG = Math.round((tdee * 0.25) / 9);
       let carbG = Math.round((tdee - (proteinG * 4 + fatG * 9)) / 4);
-      let tips = [], workouts = [];
+      let tips = [];
 
       if (bmi >= 25) {
-        category = 'Fat Loss & Recomposition'; targetSteps = 10500; targetWater = 3.4;
+        category = 'Fat Loss & Recomposition'; targetSteps = 10500;
         targetCalories = Math.max(1300, tdee - 450); proteinG = Math.round(weight * 2.0);
         fatG = Math.round((targetCalories * 0.25) / 9);
         carbG = Math.round((targetCalories - (proteinG * 4 + fatG * 9)) / 4);
         tips = [{ icon: '🥗', title: 'Protein & Fiber Density', text: 'Prioritize lean proteins and fibrous vegetables for satiety during caloric deficit.' }, { icon: '🚶‍♂️', title: 'Daily Step Volume', text: 'Hit at least 10,000 steps daily to elevate basal energy expenditure.' }];
-        workouts = ['35 Min Incline Walk', '3 Sets x 12 Bodyweight Squats', '3 Sets x 10 Push-ups', '3 Sets x 40s Plank'];
       } else if (bmi < 18.5) {
-        category = 'Lean Mass Growth'; targetSteps = 7000; targetWater = 2.5; targetCalories = tdee + 350;
+        category = 'Lean Mass Growth'; targetSteps = 7000; targetCalories = tdee + 350;
         tips = [{ icon: '🥜', title: 'Caloric Density', text: 'Eat nuts, seeds, oats, and whole milk for surplus calories.' }, { icon: '🏋️', title: 'Compound Strength', text: 'Focus on progressive resistance training (squats, bench, deadlifts).' }];
-        workouts = ['3 Sets x 8 Dumbbell Press', '3 Sets x 8 Rows', '3 Sets x 10 Romanian Deadlifts'];
       } else {
-        category = 'Lean Maintenance'; targetSteps = 8500; targetWater = 3.0; targetCalories = tdee;
+        category = 'Lean Maintenance'; targetSteps = 8500; targetCalories = tdee;
         tips = [{ icon: '⚡', title: '80/20 Balance', text: '80% unprocessed whole foods with balanced nutrient profiles.' }, { icon: '🫀', title: 'Zone 2 Cardio', text: 'Perform 30 mins of conversational-pace exercise 3x weekly.' }];
-        workouts = ['20 Min Brisk Jog', '3 Sets x 12 Shoulder Press', '3 Sets x 15 Walking Lunges'];
       }
 
       const meals = [
@@ -738,18 +1016,162 @@ app.get('/', (req, res) => {
         { key: 'dinner', name: 'Dinner', cal: Math.round(targetCalories * 0.25), icon: '🍲' }
       ];
 
-      return { bmi, category, tdee, targetSteps, targetWater, targetCalories, minIdealWeight, maxIdealWeight, proteinG, carbG, fatG, tips, workouts, meals };
+      return { bmi, category, tdee, targetSteps, targetCalories, minIdealWeight, maxIdealWeight, proteinG, carbG, fatG, tips, meals };
+    }
+
+    // --- DAILY LOG HELPER ---
+    function getCurrentActiveLog() {
+      if (!userDailyLogs[selectedDateStr]) {
+        userDailyLogs[selectedDateStr] = {
+          steps: 0,
+          distance_km: 0,
+          calories: 0,
+          active_minutes: 0,
+          sleep_hours: 7.5,
+          completedWorkouts: []
+        };
+      }
+      return userDailyLogs[selectedDateStr];
+    }
+
+    async function fetchHistoricalLogs() {
+      if (!currentUser || !currentUser.id) return;
+      try {
+        const res = await fetch('/api/daily-logs/' + currentUser.id);
+        const data = await res.json();
+        userDailyLogs = {};
+        (data || []).forEach(row => {
+          let workouts = [];
+          try { workouts = JSON.parse(row.completedWorkouts || '[]'); } catch (e) { workouts = []; }
+          userDailyLogs[row.date] = {
+            steps: row.steps || 0,
+            distance_km: row.distance_km || 0,
+            calories: row.calories || 0,
+            active_minutes: row.active_minutes || 0,
+            sleep_hours: row.sleep_hours || 7.5,
+            completedWorkouts: workouts
+          };
+        });
+        renderCalendar();
+        renderActiveDateUI();
+      } catch (e) { console.error('Failed to load logs:', e); }
+    }
+
+    async function syncActiveLogToDB() {
+      if (!currentUser || !currentUser.id) return;
+      const log = getCurrentActiveLog();
+      try {
+        await fetch('/api/daily-log/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            date: selectedDateStr,
+            steps: log.steps,
+            distance_km: log.distance_km,
+            calories: log.calories,
+            active_minutes: log.active_minutes,
+            sleep_hours: log.sleep_hours,
+            completedWorkouts: log.completedWorkouts
+          })
+        });
+      } catch (e) { console.error('Daily log sync error:', e); }
+    }
+
+    // --- CALENDAR LOGIC ---
+    function prevMonth() {
+      currentCalMonth--;
+      if (currentCalMonth < 0) {
+        currentCalMonth = 11;
+        currentCalYear--;
+      }
+      renderCalendar();
+    }
+
+    function nextMonth() {
+      currentCalMonth++;
+      if (currentCalMonth > 11) {
+        currentCalMonth = 0;
+        currentCalYear++;
+      }
+      renderCalendar();
+    }
+
+    function selectCalendarDate(dateStr) {
+      selectedDateStr = dateStr;
+      renderCalendar();
+      renderActiveDateUI();
+      renderWorkouts();
+    }
+
+    function renderCalendar() {
+      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      document.getElementById('calendarMonthYear').innerText = monthNames[currentCalMonth] + ' ' + currentCalYear;
+
+      const grid = document.getElementById('calendarGrid');
+      grid.innerHTML = '';
+
+      const firstDayIndex = new Date(currentCalYear, currentCalMonth, 1).getDay();
+      const daysInMonth = new Date(currentCalYear, currentCalMonth + 1, 0).getDate();
+
+      // Empty lead days
+      for (let i = 0; i < firstDayIndex; i++) {
+        grid.innerHTML += '<div class="cal-day empty"></div>';
+      }
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateFormatted = currentCalYear + '-' + String(currentCalMonth + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const isSelected = dateFormatted === selectedDateStr;
+        const isToday = dateFormatted === todayDateStr;
+        
+        const log = userDailyLogs[dateFormatted];
+        let dotHtml = '';
+        if (log && log.steps > 0) {
+          const target = currentUser.plan ? currentUser.plan.targetSteps : 10000;
+          if (log.steps >= target) {
+            dotHtml = '<div class="cal-dot"></div>';
+          } else {
+            dotHtml = '<div class="cal-dot partial"></div>';
+          }
+        }
+
+        grid.innerHTML += \`
+          <div class="cal-day \${isSelected ? 'active-day' : ''} \${isToday ? 'today' : ''}" onclick="selectCalendarDate('\${dateFormatted}')">
+            <span>\${d}</span>
+            \${dotHtml}
+          </div>
+        \`;
+      }
+    }
+
+    function renderActiveDateUI() {
+      const log = getCurrentActiveLog();
+      const isToday = selectedDateStr === todayDateStr;
+
+      document.getElementById('selectedDateLabel').innerText = (isToday ? 'TODAY' : 'DATE') + ' (' + selectedDateStr + ')';
+      document.getElementById('isPastBadge').style.display = isToday ? 'none' : 'inline-block';
+      document.getElementById('workoutDateContext').innerText = isToday ? 'Today (' + selectedDateStr + ')' : selectedDateStr;
+
+      document.getElementById('stepsVal').innerText = (log.steps || 0).toLocaleString();
+      document.getElementById('dispDist').innerText = (log.distance_km || 0).toFixed(2);
+      document.getElementById('dispBurn').innerText = Math.round(log.calories || 0);
+      document.getElementById('dispActiveMin').innerText = Math.round(log.active_minutes || 0);
+      document.getElementById('dispSleep').innerText = (log.sleep_hours || 7.5) + ' hrs';
+
+      const target = (currentUser && currentUser.plan) ? currentUser.plan.targetSteps : 10000;
+      const stepsPct = Math.min(100, Math.round(((log.steps || 0) / target) * 100));
+      document.getElementById('stepsPctVal').innerText = stepsPct + '%';
+      const offset = CIRCLE_CIRCUMFERENCE - (stepsPct / 100) * CIRCLE_CIRCUMFERENCE;
+      document.getElementById('stepRingCircle').style.strokeDashoffset = offset;
     }
 
     function setDietPreference(mode) {
       currentDietMode = mode;
       const btnVeg = document.getElementById('dietBtnVeg');
       const btnNonVeg = document.getElementById('dietBtnNonVeg');
-      
       btnVeg.classList.toggle('active', mode === 'veg');
       btnNonVeg.classList.toggle('active', mode === 'nonveg');
       btnNonVeg.classList.toggle('nonveg', mode === 'nonveg');
-
       renderSelectedMealBreakdown();
     }
 
@@ -806,6 +1228,49 @@ app.get('/', (req, res) => {
       });
     }
 
+    function setWorkoutCategory(catKey) {
+      currentWorkoutCategory = catKey;
+      document.querySelectorAll('.filter-pill').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('onclick').includes(catKey));
+      });
+      renderWorkouts();
+    }
+
+    function renderWorkouts() {
+      const container = document.getElementById('workoutList');
+      container.innerHTML = '';
+      const list = WORKOUT_MODULES[currentWorkoutCategory] || [];
+      const log = getCurrentActiveLog();
+
+      list.forEach((w, idx) => {
+        const uniqueKey = currentWorkoutCategory + '_' + idx;
+        const isDone = log.completedWorkouts && log.completedWorkouts.includes(uniqueKey);
+
+        container.innerHTML += \`
+          <div class="workout-card \${isDone ? 'done' : ''}" onclick="toggleWorkout('\${uniqueKey}')">
+            <div>
+              <b style="font-size:0.92rem; color:#fff; font-family:'Space Grotesk';">\${w.name}</b>
+              <div style="font-size:0.75rem; color:var(--accent-cyan); margin-top:2px;">\${w.sets} • \${w.reps} • <span style="color:var(--accent-orange);">\${w.rest}</span></div>
+              <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px;">\${w.focus}</div>
+            </div>
+            <span style="font-size:1.2rem;">\${isDone ? '✅' : '⚪'}</span>
+          </div>
+        \`;
+      });
+    }
+
+    function toggleWorkout(key) {
+      const log = getCurrentActiveLog();
+      if (!log.completedWorkouts) log.completedWorkouts = [];
+      if (log.completedWorkouts.includes(key)) {
+        log.completedWorkouts = log.completedWorkouts.filter(i => i !== key);
+      } else {
+        log.completedWorkouts.push(key);
+      }
+      renderWorkouts();
+      syncActiveLogToDB();
+    }
+
     async function handleRegister(e) {
       e.preventDefault();
       const payload = {
@@ -814,6 +1279,7 @@ app.get('/', (req, res) => {
         password: document.getElementById('regPassword').value,
         age: Number(document.getElementById('regAge').value),
         gender: document.getElementById('regGender').value,
+        blood_group: document.getElementById('regBloodGroup').value,
         weight: Number(document.getElementById('regWeight').value),
         height: Number(document.getElementById('regHeight').value)
       };
@@ -852,6 +1318,7 @@ app.get('/', (req, res) => {
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
         loadDashboard();
         initAutoSensors();
+        setupHourlyHydrationNotifier();
       } catch (err) { alert(err.message); }
     }
 
@@ -860,6 +1327,7 @@ app.get('/', (req, res) => {
       const updatedName = document.getElementById('editName').value;
       const updatedAge = Number(document.getElementById('editAge').value);
       const updatedGender = document.getElementById('editGender').value;
+      const updatedBlood = document.getElementById('editBloodGroup').value;
       const updatedWeight = Number(document.getElementById('editWeight').value);
       const updatedHeight = Number(document.getElementById('editHeight').value);
 
@@ -872,6 +1340,7 @@ app.get('/', (req, res) => {
             name: updatedName,
             age: updatedAge,
             gender: updatedGender,
+            blood_group: updatedBlood,
             weight: updatedWeight,
             height: updatedHeight
           })
@@ -882,16 +1351,15 @@ app.get('/', (req, res) => {
         currentUser.name = updatedName;
         currentUser.age = updatedAge;
         currentUser.gender = updatedGender;
+        currentUser.blood_group = updatedBlood;
         currentUser.weight = updatedWeight;
         currentUser.height = updatedHeight;
         currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
 
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
         loadDashboard();
-        alert('Profile updated and metrics recalculated!');
-      } catch (err) {
-        alert(err.message);
-      }
+        alert('Profile & Blood Group updated!');
+      } catch (err) { alert(err.message); }
     }
 
     function loadDashboard() {
@@ -901,7 +1369,6 @@ app.get('/', (req, res) => {
       switchTab('activity');
 
       document.getElementById('userName').innerText = 'Hi, ' + currentUser.name + ' 👋';
-      document.getElementById('userPlanCategory').innerText = currentUser.plan.category + ' (BMI ' + currentUser.plan.bmi + ')';
       document.getElementById('targetSteps').innerText = 'Target: ' + currentUser.plan.targetSteps.toLocaleString() + ' steps';
       document.getElementById('dispTDEE').innerText = currentUser.plan.tdee + ' kcal';
       document.getElementById('dispCalories').innerText = currentUser.plan.targetCalories + ' kcal';
@@ -911,8 +1378,10 @@ app.get('/', (req, res) => {
 
       renderMealBoxes();
       renderSelectedMealBreakdown();
+      renderWorkouts();
 
       document.getElementById('bioBMI').innerText = currentUser.plan.bmi;
+      document.getElementById('bioBlood').innerText = currentUser.blood_group || 'O+';
       document.getElementById('bioIdealWeight').innerText = currentUser.plan.minIdealWeight + ' - ' + currentUser.plan.maxIdealWeight + ' kg';
 
       const tipContainer = document.getElementById('customTipsContainer');
@@ -923,68 +1392,15 @@ app.get('/', (req, res) => {
         \`;
       });
 
-      const workoutContainer = document.getElementById('workoutList');
-      workoutContainer.innerHTML = '';
-      currentUser.plan.workouts.forEach((w, idx) => {
-        const isDone = currentUser.completedWorkouts && currentUser.completedWorkouts.includes(idx);
-        workoutContainer.innerHTML += \`
-          <div class="routine-row \${isDone ? 'done' : ''}" onclick="toggleWorkout(\${idx})">
-            <span>\${w}</span><span>\${isDone ? '✅' : '⚪'}</span>
-          </div>
-        \`;
-      });
-
       document.getElementById('editName').value = currentUser.name;
       document.getElementById('editEmail').value = currentUser.email;
       document.getElementById('editAge').value = currentUser.age;
       document.getElementById('editGender').value = currentUser.gender || 'male';
+      document.getElementById('editBloodGroup').value = currentUser.blood_group || 'O+';
       document.getElementById('editWeight').value = currentUser.weight;
       document.getElementById('editHeight').value = currentUser.height;
 
-      renderUI();
-    }
-
-    function renderUI() {
-      document.getElementById('stepsVal').innerText = currentUser.steps.toLocaleString();
-      document.getElementById('dispDist').innerText = (currentUser.steps * 0.00075).toFixed(2);
-      document.getElementById('dispBurn').innerText = Math.round(currentUser.steps * 0.04);
-      document.getElementById('dispActiveMin').innerText = Math.round(currentUser.steps / 100);
-
-      const stepsPct = Math.min(100, Math.round((currentUser.steps / currentUser.plan.targetSteps) * 100));
-      document.getElementById('stepsPctVal').innerText = stepsPct + '%';
-      const offset = CIRCLE_CIRCUMFERENCE - (stepsPct / 100) * CIRCLE_CIRCUMFERENCE;
-      document.getElementById('stepRingCircle').style.strokeDashoffset = offset;
-
-      document.getElementById('waterValQuick').innerText = currentUser.water.toFixed(2) + 'L / ' + currentUser.plan.targetWater + 'L';
-      const waterPct = Math.min(100, Math.round((currentUser.water / currentUser.plan.targetWater) * 100));
-      document.getElementById('waterBarQuick').style.width = waterPct + '%';
-    }
-
-    async function syncBackend() {
-      if (!currentUser || !currentUser.id) return;
-      localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
-      try {
-        await fetch('/api/sync', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: currentUser.id, steps: currentUser.steps, water: currentUser.water, completedWorkouts: currentUser.completedWorkouts
-          })
-        });
-      } catch (err) { console.error('Database sync error:', err); }
-    }
-
-    function addWater(amt) {
-      currentUser.water = Math.round((currentUser.water + amt) * 100) / 100;
-      renderUI();
-      syncBackend();
-    }
-
-    function toggleWorkout(idx) {
-      if (!currentUser.completedWorkouts) currentUser.completedWorkouts = [];
-      if (currentUser.completedWorkouts.includes(idx)) currentUser.completedWorkouts = currentUser.completedWorkouts.filter(i => i !== idx);
-      else currentUser.completedWorkouts.push(idx);
-      loadDashboard();
-      syncBackend();
+      fetchHistoricalLogs();
     }
 
     function logout() { localStorage.removeItem('pulseflow_session'); location.reload(); }
@@ -1007,13 +1423,22 @@ app.get('/', (req, res) => {
       const linearAccel = Math.abs(rawMag - gravity);
       const now = Date.now();
 
+      // Only increment steps for today's active record
+      if (selectedDateStr !== todayDateStr) return;
+
       if (linearAccel > dynThreshold && linearAccel > lastFilteredVal) isPeakRising = true;
       if (isPeakRising && linearAccel < lastFilteredVal && (now - lastStepTime > 250) && (now - lastStepTime < 1800)) {
-        currentUser.steps++;
+        const log = getCurrentActiveLog();
+        log.steps++;
+        log.distance_km = parseFloat((log.steps * 0.00075).toFixed(2));
+        log.calories = Math.round(log.steps * 0.04);
+        log.active_minutes = Math.round(log.steps / 100);
+
         lastStepTime = now;
         isPeakRising = false;
-        renderUI();
-        syncBackend();
+        renderActiveDateUI();
+        renderCalendar();
+        syncActiveLogToDB();
       } else if (now - lastStepTime >= 1800) {
         lastStepTime = now;
         isPeakRising = false;
@@ -1025,6 +1450,7 @@ app.get('/', (req, res) => {
       currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
       loadDashboard();
       initAutoSensors();
+      setupHourlyHydrationNotifier();
     }
   </script>
 </body>
