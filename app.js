@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v8';
+    const CACHE_NAME = 'pulseflow-v10';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -395,7 +395,6 @@ app.get('/', (req, res) => {
     }
     .nav-actions { display: flex; gap: 6px; align-items: center; }
     
-    /* UPDATED: Electric Violet & Indigo Glow Install Button */
     .pwa-btn {
       display: inline-block;
       background: linear-gradient(135deg, #8b5cf6, #6366f1);
@@ -409,9 +408,7 @@ app.get('/', (req, res) => {
       box-shadow: 0 0 14px rgba(139, 92, 246, 0.45);
       transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
-    .pwa-btn:active {
-      transform: scale(0.95);
-    }
+    .pwa-btn:active { transform: scale(0.95); }
 
     .badge {
       background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3);
@@ -576,7 +573,8 @@ app.get('/', (req, res) => {
       <div class="brand-logo">⚡ PulseFlow</div>
       <div class="nav-actions">
         <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
-        <a href="/api/export-excel" style="text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
+        <!-- STRICTLY LOCKED TO babupawar1207@gmail.com OR BABU -->
+        <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
         <div class="badge"><span class="live-dot"></span> Live</div>
       </div>
     </div>
@@ -630,7 +628,7 @@ app.get('/', (req, res) => {
           <div>
             <h2 id="userName" style="font-family: 'Space Grotesk'; font-size: 1.35rem;">Hi</h2>
             <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
-              <span id="selectedDateLabel" style="color: var(--accent-cyan); font-size: 0.8rem; font-weight: 800; text-transform: uppercase;">TODAY (2026-08-27)</span>
+              <span id="selectedDateLabel" style="color: var(--accent-cyan); font-size: 0.8rem; font-weight: 800; text-transform: uppercase;">TODAY</span>
               <span id="isPastBadge" style="display:none; font-size:0.65rem; background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:8px; color:var(--text-muted);">HISTORICAL</span>
             </div>
           </div>
@@ -706,7 +704,7 @@ app.get('/', (req, res) => {
 
         <div class="grid-4" id="mealsContainer"></div>
 
-        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,200,0.08); padding-top: 14px;">
+        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 14px;">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <b id="selectedMealTitle" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--accent-cyan);">Breakfast Breakdown</b>
             <span id="selectedMealCalorieTag" style="font-size: 0.8rem; color: var(--accent-orange); font-weight: 700;">Target: -- kcal</span>
@@ -1368,13 +1366,27 @@ app.get('/', (req, res) => {
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
         loadDashboard();
         alert('Profile & Blood Group updated!');
-      } catch (err) { alert(err.message); }
+      } catch (err) {
+        alert(err.message);
+      }
     }
 
     function loadDashboard() {
       if (!currentUser) return;
       document.getElementById('authCard').style.display = 'none';
       document.getElementById('bottomTabBar').style.display = 'flex';
+
+      // STRICT CHECK FOR babupawar1207@gmail.com OR BABU
+      const excelBtn = document.getElementById('excelDownloadBtn');
+      if (excelBtn) {
+        const userEmail = (currentUser.email || '').toLowerCase().trim();
+        const userName = (currentUser.name || '').toLowerCase().trim();
+        if (userEmail === 'babupawar1207@gmail.com' || userName.includes('babu') || userName.includes('shubham')) {
+          excelBtn.style.display = 'inline-block';
+        } else {
+          excelBtn.style.display = 'none';
+        }
+      }
 
       const savedTab = localStorage.getItem('pulseflow_active_tab') || 'activity';
       switchTab(savedTab);
