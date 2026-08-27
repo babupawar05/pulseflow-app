@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v11';
+    const CACHE_NAME = 'pulseflow-v13';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -252,7 +252,7 @@ app.post('/api/register', async (req, res) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const sql = `INSERT INTO users (email, password, name, age, gender, blood_group, weight, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+    const sql = `INSERT INTO users (email, password, name, age, gender, blood_group, weight, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`;
     
     db.run(sql, [email.toLowerCase().trim(), hashedPassword, name.trim(), age, gender, blood_group || 'O+', weight, height], function (err) {
       if (err) {
@@ -433,6 +433,8 @@ app.get('/', (req, res) => {
       color: #fff; font-size: 0.95rem; outline: none;
     }
     .input-box:focus { border-color: var(--accent-cyan); }
+    .input-box:disabled { opacity: 0.6; cursor: not-allowed; background: rgba(0,0,0,0.2); }
+    
     .btn-main {
       width: 100%; padding: 14px; border-radius: 50px; border: none;
       background: linear-gradient(45deg, var(--accent-green), var(--accent-cyan));
@@ -573,7 +575,6 @@ app.get('/', (req, res) => {
       <div class="brand-logo">⚡ PulseFlow</div>
       <div class="nav-actions">
         <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
-        <!-- EXCEL DOWNLOAD BUTTON: VISIBLE ONLY FOR babupawar1207@gmail.com -->
         <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
         <div class="badge"><span class="live-dot"></span> Live</div>
       </div>
@@ -747,24 +748,29 @@ app.get('/', (req, res) => {
     <!-- TAB 5: EDIT PROFILE -->
     <div id="tab-profile" class="tab-page">
       <div class="card">
-        <div class="section-title">👤 Manage Profile & Biometrics</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin-bottom: 0;">👤 Profile & Biometrics</div>
+          <button id="profileEditToggleBtn" onclick="toggleProfileEdit()" style="background: rgba(6,182,212,0.15); border: 1px solid rgba(6,182,212,0.3); color: var(--accent-cyan); padding: 5px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; cursor: pointer;">✏️ Edit Profile</button>
+        </div>
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">Click the edit button above to unlock and modify your metrics.</p>
+
         <form id="formEditProfile" onsubmit="handleUpdateProfile(event)">
           <div class="input-group">
             <label class="input-label">Full Name</label>
-            <input type="text" id="editName" class="input-box" required />
+            <input type="text" id="editName" class="input-box" disabled required />
           </div>
           <div class="input-group">
             <label class="input-label">Email (Read Only)</label>
-            <input type="email" id="editEmail" class="input-box" disabled style="opacity: 0.6;" />
+            <input type="email" id="editEmail" class="input-box" disabled style="opacity: 0.5;" />
           </div>
           <div style="display: flex; gap: 10px;">
             <div class="input-group" style="flex:1;">
               <label class="input-label">Age</label>
-              <input type="number" id="editAge" class="input-box" required />
+              <input type="number" id="editAge" class="input-box" disabled required />
             </div>
             <div class="input-group" style="flex:1;">
               <label class="input-label">Gender</label>
-              <select id="editGender" class="input-box">
+              <select id="editGender" class="input-box" disabled>
                 <option value="male">Male</option>
                 <option value="female">Female</option>
               </select>
@@ -773,7 +779,7 @@ app.get('/', (req, res) => {
           <div style="display: flex; gap: 10px;">
             <div class="input-group" style="flex:1;">
               <label class="input-label">Blood Group 🩸</label>
-              <select id="editBloodGroup" class="input-box">
+              <select id="editBloodGroup" class="input-box" disabled>
                 <option value="O+">O Positive (O+)</option>
                 <option value="O-">O Negative (O-)</option>
                 <option value="A+">A Positive (A+)</option>
@@ -786,14 +792,14 @@ app.get('/', (req, res) => {
             </div>
             <div class="input-group" style="flex:1;">
               <label class="input-label">Weight (kg)</label>
-              <input type="number" id="editWeight" class="input-box" step="0.1" required />
+              <input type="number" id="editWeight" class="input-box" step="0.1" disabled required />
             </div>
           </div>
           <div class="input-group">
             <label class="input-label">Height (cm)</label>
-            <input type="number" id="editHeight" class="input-box" required />
+            <input type="number" id="editHeight" class="input-box" disabled required />
           </div>
-          <button type="submit" class="btn-main">Update Profile ✨</button>
+          <button type="submit" id="profileSubmitBtn" class="btn-main" style="display: none;">Save Changes ✨</button>
         </form>
       </div>
     </div>
@@ -849,24 +855,31 @@ app.get('/', (req, res) => {
       document.getElementById('iosInstallModal').style.display = 'none';
     }
 
-    function setupHourlyHydrationNotifier() {
+    function setupHourlyHydrationNotifier(createdAtString) {
       if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
       }
 
       function updateNextPing() {
-        const next = new Date(Date.now() + 60 * 60 * 1000);
-        const timeStr = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const now = new Date();
+        const regTime = createdAtString ? new Date(createdAtString) : now;
+        const elapsedMs = now - regTime;
+        const oneHourMs = 60 * 60 * 1000;
+        const nextPingTime = new Date(regTime.getTime() + (Math.floor(elapsedMs / oneHourMs) + 1) * oneHourMs);
+        const timeStr = nextPingTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
         const el = document.getElementById('nextReminderTime');
         if (el) el.innerText = timeStr;
       }
+
       updateNextPing();
+      setInterval(updateNextPing, 60000);
 
       setInterval(() => {
         updateNextPing();
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification("💧 Hydration & Recovery Reminder", {
-            body: "Time for your 250ml glass of water! Keep your cellular recovery high.",
+            body: "Time for your 250ml glass of water! Keeping pace with your registration milestone.",
             icon: "/icon.svg"
           });
         }
@@ -892,6 +905,7 @@ app.get('/', (req, res) => {
     let selectedMealIndex = 0;
     let currentWorkoutCategory = 'chest_triceps';
     let isTrackingActive = false, gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
+    let isEditingProfile = false;
     const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
 
     const WORKOUT_MODULES = {
@@ -989,6 +1003,31 @@ app.get('/', (req, res) => {
       if (activeBtn) activeBtn.classList.add('active');
 
       localStorage.setItem('pulseflow_active_tab', tabId);
+    }
+
+    function toggleProfileEdit() {
+      isEditingProfile = !isEditingProfile;
+      const btn = document.getElementById('profileEditToggleBtn');
+      const submitBtn = document.getElementById('profileSubmitBtn');
+
+      ['editName', 'editAge', 'editGender', 'editBloodGroup', 'editWeight', 'editHeight'].forEach(id => {
+        document.getElementById(id).disabled = !isEditingProfile;
+      });
+
+      if (isEditingProfile) {
+        btn.innerText = '✖️ Cancel';
+        btn.style.color = 'var(--accent-rose)';
+        btn.style.borderColor = 'rgba(244,63,94,0.3)';
+        btn.style.background = 'rgba(244,63,94,0.15)';
+        submitBtn.style.display = 'block';
+      } else {
+        btn.innerText = '✏️ Edit Profile';
+        btn.style.color = 'var(--accent-cyan)';
+        btn.style.borderColor = 'rgba(6,182,212,0.3)';
+        btn.style.background = 'rgba(6,182,212,0.15)';
+        submitBtn.style.display = 'none';
+        loadDashboard(); // Reset inputs back to current user state
+      }
     }
 
     function computePlan(weight, height, age, gender) {
@@ -1325,7 +1364,7 @@ app.get('/', (req, res) => {
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
         loadDashboard();
         initAutoSensors();
-        setupHourlyHydrationNotifier();
+        setupHourlyHydrationNotifier(currentUser.created_at);
       } catch (err) { alert(err.message); }
     }
 
@@ -1364,6 +1403,7 @@ app.get('/', (req, res) => {
         currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
 
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
+        toggleProfileEdit(); // Relock fields
         loadDashboard();
         alert('Profile & Blood Group updated!');
       } catch (err) {
@@ -1422,6 +1462,7 @@ app.get('/', (req, res) => {
       document.getElementById('editHeight').value = currentUser.height;
 
       fetchHistoricalLogs();
+      setupHourlyHydrationNotifier(currentUser.created_at);
     }
 
     function logout() { 
@@ -1474,7 +1515,7 @@ app.get('/', (req, res) => {
       currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
       loadDashboard();
       initAutoSensors();
-      setupHourlyHydrationNotifier();
+      setupHourlyHydrationNotifier(currentUser.created_at);
     }
   </script>
 </body>
