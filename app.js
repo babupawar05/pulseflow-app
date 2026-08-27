@@ -3,6 +3,7 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,8 +11,51 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- 1. INITIALIZE SQLITE DATABASE ---
-const db = new sqlite3.Database(path.join(__dirname, 'fitness.db'), (err) => {
+const dbPath = path.join(__dirname, 'fitness.db');
+const csvPath = path.join(__dirname, 'fitness_records.csv');
+
+// --- 1. REAL-TIME EXCEL / CSV DISK SYNC ---
+function exportToExcelCSV() {
+  const query = `SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users`;
+  db.all(query, [], (err, rows) => {
+    if (err) return console.error('CSV Export Error:', err.message);
+
+    const headers = ['User ID', 'Full Name', 'Email', 'Age', 'Gender', 'Weight (kg)', 'Height (cm)', 'Total Steps', 'Water (L)', 'Completed Workouts', 'Registered At'];
+    const csvRows = [headers.join(',')];
+
+    (rows || []).forEach(r => {
+      let workouts = '';
+      try { workouts = JSON.parse(r.completedWorkouts || '[]').join('; '); } catch (e) { workouts = ''; }
+      const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
+      const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
+
+      csvRows.push([
+        r.id,
+        cleanName,
+        cleanEmail,
+        r.age,
+        r.gender,
+        r.weight,
+        r.height,
+        r.steps,
+        r.water,
+        cleanWorkouts,
+        `"${r.created_at}"`
+      ].join(','));
+    });
+
+    try {
+      fs.writeFileSync(csvPath, csvRows.join('\r\n'), 'utf8');
+      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} records)`);
+    } catch (writeErr) {
+      console.error('File write error:', writeErr.message);
+    }
+  });
+}
+
+// --- 2. DATABASE INITIALIZATION ---
+const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
   } else {
@@ -19,7 +63,6 @@ const db = new sqlite3.Database(path.join(__dirname, 'fitness.db'), (err) => {
   }
 });
 
-// Create tables automatically on startup
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -36,12 +79,114 @@ db.serialize(() => {
       completedWorkouts TEXT DEFAULT '[]',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
+  `, () => {
+    exportToExcelCSV();
+  });
+});
+
+// --- 3. PWA ASSET ROUTES ---
+
+// Dynamic App Icon (192x192 and 512x512 SVG)
+app.get('/icon.svg', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+      <defs>
+        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#10b981"/>
+          <stop offset="100%" stop-color="#06b6d4"/>
+        </linearGradient>
+      </defs>
+      <rect width="512" height="512" rx="128" fill="#070913"/>
+      <path d="M280 64L136 296h112l-32 152 160-232H264z" fill="url(#grad)" stroke="#10b981" stroke-width="8" stroke-linejoin="round"/>
+    </svg>
   `);
 });
 
-// --- 2. BACKEND API ENDPOINTS ---
+// Web App Manifest
+app.get('/manifest.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.json({
+    name: "PulseFlow Fitness OS",
+    short_name: "PulseFlow",
+    description: "Personal Biometric Fitness Tracker & OS",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#070913",
+    theme_color: "#070913",
+    orientation: "portrait",
+    icons: [
+      {
+        src: "/icon.svg",
+        sizes: "192x192 512x512",
+        type: "image/svg+xml",
+        purpose: "any maskable"
+      }
+    ]
+  });
+});
 
-// View all database records directly in the browser
+// Service Worker
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(`
+    const CACHE_NAME = 'pulseflow-v1';
+    const ASSETS = ['/', '/manifest.json', '/icon.svg'];
+
+    self.addEventListener('install', (event) => {
+      event.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+      );
+      self.skipWaiting();
+    });
+
+    self.addEventListener('activate', (event) => {
+      event.waitUntil(
+        caches.keys().then((keys) => {
+          return Promise.all(
+            keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+          );
+        })
+      );
+      self.clients.claim();
+    });
+
+    self.addEventListener('fetch', (event) => {
+      if (event.request.url.includes('/api/')) {
+        return; // Network-only for live API and sync
+      }
+      event.respondWith(
+        caches.match(event.request).then((response) => response || fetch(event.request))
+      );
+    });
+  `);
+});
+
+// --- 4. BACKEND API ROUTES ---
+
+// Direct CSV Download Route
+app.get('/api/export-excel', (req, res) => {
+  const query = `SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users`;
+  db.all(query, [], (err, rows) => {
+    if (err) return res.status(500).send('Database read error: ' + err.message);
+
+    const headers = 'User ID,Full Name,Email,Age,Gender,Weight (kg),Height (cm),Total Steps,Water (L),Completed Workouts,Registered At\r\n';
+    const body = (rows || []).map(r => {
+      let workouts = '';
+      try { workouts = JSON.parse(r.completedWorkouts || '[]').join('; '); } catch (e) { workouts = ''; }
+      const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
+      const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
+      const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
+      return `${r.id},${cleanName},${cleanEmail},${r.age},${r.gender},${r.weight},${r.height},${r.steps},${r.water},${cleanWorkouts},"${r.created_at}"`;
+    }).join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="fitness_records.csv"');
+    res.send(headers + body);
+  });
+});
+
+// Admin Raw JSON View
 app.get('/api/users', (req, res) => {
   db.all('SELECT id, name, email, age, gender, weight, height, steps, water, completedWorkouts, created_at FROM users', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -49,7 +194,7 @@ app.get('/api/users', (req, res) => {
   });
 });
 
-// Register New User
+// Register User
 app.post('/api/register', async (req, res) => {
   const { email, password, name, age, gender, weight, height } = req.body;
   if (!email || !password || !name || !age || !weight || !height) {
@@ -67,14 +212,15 @@ app.post('/api/register', async (req, res) => {
         }
         return res.status(500).json({ error: err.message });
       }
+      exportToExcelCSV();
       res.json({ success: true, userId: this.lastID });
     });
   } catch (err) {
-    res.status(500).json({ error: 'Encryption failure on server.' });
+    res.status(500).json({ error: 'Encryption failure.' });
   }
 });
 
-// Log In Existing User
+// Login User
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
@@ -89,12 +235,12 @@ app.post('/api/login', (req, res) => {
 
     const safeUser = { ...user };
     delete safeUser.password;
-    safeUser.completedWorkouts = JSON.parse(safeUser.completedWorkouts || '[]');
+    try { safeUser.completedWorkouts = JSON.parse(safeUser.completedWorkouts || '[]'); } catch (e) { safeUser.completedWorkouts = []; }
     res.json({ success: true, user: safeUser });
   });
 });
 
-// Sync Live Steps, Hydration & Workouts to Database
+// Live Stats Sync
 app.post('/api/sync', (req, res) => {
   const { id, steps, water, completedWorkouts } = req.body;
   if (!id) return res.status(400).json({ error: 'User ID missing.' });
@@ -102,22 +248,32 @@ app.post('/api/sync', (req, res) => {
   const sql = `UPDATE users SET steps = ?, water = ?, completedWorkouts = ? WHERE id = ?`;
   db.run(sql, [steps, water, JSON.stringify(completedWorkouts || []), id], function (err) {
     if (err) return res.status(500).json({ error: err.message });
+    exportToExcelCSV();
     res.json({ success: true });
   });
 });
 
-// --- 3. SERVE FULL TABBED UI DIRECTLY ---
+// --- 5. FRONTEND UI & LOGIC ---
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PulseFlow // Cloud Fitness OS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>PulseFlow // Fitness OS</title>
+
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#070913" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PulseFlow" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
-  
   <style>
     :root {
       --bg-dark: #070913;
@@ -130,9 +286,7 @@ app.get('/', (req, res) => {
       --accent-purple: #a855f7;
       --text-muted: #94a3b8;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    
     body {
       font-family: 'Plus Jakarta Sans', sans-serif;
       background: var(--bg-dark);
@@ -140,54 +294,37 @@ app.get('/', (req, res) => {
         radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.12) 0px, transparent 45%),
         radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.10) 0px, transparent 40%),
         radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.10) 0px, transparent 50%);
-      color: #fff;
-      min-height: 100vh;
-      display: flex;
-      justify-content: center;
-      padding: 16px 14px 90px;
+      color: #fff; min-height: 100vh; display: flex; justify-content: center; padding: 16px 14px 90px;
     }
-
     .app-container { width: 100%; max-width: 650px; display: flex; flex-direction: column; gap: 16px; }
     .nav-bar { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; }
     .brand-logo {
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 1.4rem;
-      font-weight: 800;
+      font-family: 'Space Grotesk', sans-serif; font-size: 1.4rem; font-weight: 800;
       background: linear-gradient(45deg, var(--accent-green), var(--accent-cyan));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .nav-actions { display: flex; gap: 6px; align-items: center; }
+    .pwa-btn {
+      display: none; background: linear-gradient(45deg, var(--accent-cyan), var(--accent-green));
+      color: #02120b; border: none; font-size: 0.72rem; font-weight: 800;
+      padding: 5px 12px; border-radius: 20px; cursor: pointer;
     }
     .badge {
-      background: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      color: var(--accent-green);
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.72rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      display: flex;
-      align-items: center;
-      gap: 5px;
+      background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--accent-green); padding: 4px 10px; border-radius: 20px; font-size: 0.72rem;
+      font-weight: 700; text-transform: uppercase; display: flex; align-items: center; gap: 5px;
     }
     .live-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--accent-green);
-      box-shadow: 0 0 8px var(--accent-green);
-      animation: pulse 1.5s infinite;
+      width: 7px; height: 7px; border-radius: 50%; background: var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green); animation: pulse 1.5s infinite;
     }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-
     .card {
-      background: var(--card-bg);
-      backdrop-filter: blur(24px);
-      border: 1px solid var(--card-border);
-      border-radius: 24px;
-      padding: 22px;
-      box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+      background: var(--card-bg); backdrop-filter: blur(24px); border: 1px solid var(--card-border);
+      border-radius: 24px; padding: 22px; box-shadow: 0 12px 36px rgba(0,0,0,0.4);
     }
     .section-title { font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem; font-weight: 700; margin-bottom: 12px; }
-
     .input-group { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
     .input-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
     .input-box {
@@ -196,7 +333,6 @@ app.get('/', (req, res) => {
       color: #fff; font-size: 0.95rem; outline: none;
     }
     .input-box:focus { border-color: var(--accent-cyan); }
-
     .btn-main {
       width: 100%; padding: 14px; border-radius: 50px; border: none;
       background: linear-gradient(45deg, var(--accent-green), var(--accent-cyan));
@@ -204,14 +340,12 @@ app.get('/', (req, res) => {
       font-family: 'Space Grotesk', sans-serif; font-size: 1rem;
     }
     .btn-main:active { transform: scale(0.98); }
-
     .auth-toggle { display: flex; background: rgba(0,0,0,0.4); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
     .auth-toggle button {
       flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-muted);
       font-weight: 700; border-radius: 8px; cursor: pointer;
     }
     .auth-toggle button.active { background: rgba(255,255,255,0.1); color: #fff; }
-
     .ring-container { position: relative; width: 190px; height: 190px; margin: 10px auto; display: flex; align-items: center; justify-content: center; }
     .ring-svg { transform: rotate(-90deg); width: 190px; height: 190px; }
     .ring-bg { fill: none; stroke: rgba(255, 255, 255, 0.06); stroke-width: 12; }
@@ -221,7 +355,6 @@ app.get('/', (req, res) => {
     }
     .ring-center-content { position: absolute; display: flex; flex-direction: column; align-items: center; }
     .steps-display { font-size: 2.5rem; font-weight: 800; font-family: 'Space Grotesk', sans-serif; line-height: 1; }
-
     .stats-trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
     .stat-pill {
       background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
@@ -229,34 +362,28 @@ app.get('/', (req, res) => {
     }
     .stat-pill .val { font-family: 'Space Grotesk'; font-weight: 700; font-size: 1.15rem; color: var(--accent-cyan); }
     .stat-pill .lbl { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; margin-top: 2px; }
-
     .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-
     .metric-card { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06); border-radius: 18px; padding: 14px; }
     .progress-track { width: 100%; height: 7px; background: rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden; margin: 8px 0; }
     .progress-fill { height: 100%; width: 0%; transition: width 0.4s ease; }
-
     .chip-btn {
       background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
       padding: 10px 14px; border-radius: 14px; font-size: 0.82rem; font-weight: 700;
       cursor: pointer; color: #fff; flex: 1; text-align: center;
     }
-
     .tip-item {
       display: flex; align-items: flex-start; gap: 12px; padding: 12px;
       background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
       border-radius: 14px; margin-bottom: 8px; font-size: 0.85rem; line-height: 1.4;
     }
-
     .routine-row {
       display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
       background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
       border-radius: 14px; margin-top: 8px; font-size: 0.88rem; cursor: pointer;
     }
     .routine-row.done { text-decoration: line-through; opacity: 0.45; border-color: var(--accent-green); }
-
     .tab-bar {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
       width: calc(100% - 24px); max-width: 600px; background: rgba(13, 17, 30, 0.94);
@@ -270,89 +397,55 @@ app.get('/', (req, res) => {
       display: flex; flex-direction: column; align-items: center; gap: 3px;
     }
     .tab-btn.active { color: #fff; background: rgba(255,255,255,0.1); }
-
     .tab-page { display: none; flex-direction: column; gap: 14px; }
     .tab-page.active { display: flex; }
   </style>
 </head>
 <body>
-
   <svg style="width:0; height:0; position:absolute;" aria-hidden="true" focusable="false">
     <linearGradient id="cyanGreenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#10b981" />
-      <stop offset="100%" stop-color="#06b6d4" />
+      <stop offset="0%" stop-color="#10b981" /><stop offset="100%" stop-color="#06b6d4" />
     </linearGradient>
   </svg>
 
   <div class="app-container">
-
     <div class="nav-bar">
       <div class="brand-logo">⚡ PulseFlow</div>
-      <div id="topStatusBadge" class="badge"><span class="live-dot"></span> SQL DB Active</div>
+      <div class="nav-actions">
+        <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
+        <a href="/api/export-excel" style="text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
+        <div class="badge"><span class="live-dot"></span> Live</div>
+      </div>
     </div>
 
-    <!-- AUTHENTICATION CARD -->
     <div id="authCard" class="card">
       <div class="auth-toggle">
         <button id="tabBtnLogin" class="active" onclick="toggleAuthMode('login')">Log In</button>
         <button id="tabBtnRegister" onclick="toggleAuthMode('register')">Create Account</button>
       </div>
 
-      <!-- LOGIN FORM -->
       <form id="formLogin" onsubmit="handleLogin(event)">
-        <div class="input-group">
-          <label class="input-label">Email</label>
-          <input type="email" id="loginEmail" class="input-box" placeholder="e.g. user@domain.com" required />
-        </div>
-        <div class="input-group">
-          <label class="input-label">Password</label>
-          <input type="password" id="loginPassword" class="input-box" placeholder="••••••••" required />
-        </div>
-        <button type="submit" class="btn-main">Access My Database Profile 🚀</button>
+        <div class="input-group"><label class="input-label">Email</label><input type="email" id="loginEmail" class="input-box" placeholder="e.g. user@domain.com" required /></div>
+        <div class="input-group"><label class="input-label">Password</label><input type="password" id="loginPassword" class="input-box" placeholder="••••••••" required /></div>
+        <button type="submit" class="btn-main">Access My Profile 🚀</button>
       </form>
 
-      <!-- REGISTRATION FORM -->
       <form id="formRegister" style="display: none;" onsubmit="handleRegister(event)">
-        <div class="input-group">
-          <label class="input-label">Full Name</label>
-          <input type="text" id="regName" class="input-box" placeholder="e.g. Alex" required />
-        </div>
-        <div class="input-group">
-          <label class="input-label">Email</label>
-          <input type="email" id="regEmail" class="input-box" placeholder="e.g. user@domain.com" required />
-        </div>
-        <div class="input-group">
-          <label class="input-label">Password</label>
-          <input type="password" id="regPassword" class="input-box" placeholder="Create strong password" required />
+        <div class="input-group"><label class="input-label">Full Name</label><input type="text" id="regName" class="input-box" placeholder="e.g. Alex" required /></div>
+        <div class="input-group"><label class="input-label">Email</label><input type="email" id="regEmail" class="input-box" placeholder="e.g. user@domain.com" required /></div>
+        <div class="input-group"><label class="input-label">Password</label><input type="password" id="regPassword" class="input-box" placeholder="Create strong password" required /></div>
+        <div style="display: flex; gap: 10px;">
+          <div class="input-group" style="flex:1;"><label class="input-label">Age</label><input type="number" id="regAge" class="input-box" placeholder="e.g. 24" required /></div>
+          <div class="input-group" style="flex:1;"><label class="input-label">Gender</label><select id="regGender" class="input-box"><option value="male">Male</option><option value="female">Female</option></select></div>
         </div>
         <div style="display: flex; gap: 10px;">
-          <div class="input-group" style="flex:1;">
-            <label class="input-label">Age</label>
-            <input type="number" id="regAge" class="input-box" placeholder="e.g. 24" required />
-          </div>
-          <div class="input-group" style="flex:1;">
-            <label class="input-label">Gender</label>
-            <select id="regGender" class="input-box">
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-            </select>
-          </div>
+          <div class="input-group" style="flex:1;"><label class="input-label">Weight (kg)</label><input type="number" id="regWeight" class="input-box" placeholder="e.g. 70" step="0.1" required /></div>
+          <div class="input-group" style="flex:1;"><label class="input-label">Height (cm)</label><input type="number" id="regHeight" class="input-box" placeholder="e.g. 175" required /></div>
         </div>
-        <div style="display: flex; gap: 10px;">
-          <div class="input-group" style="flex:1;">
-            <label class="input-label">Weight (kg)</label>
-            <input type="number" id="regWeight" class="input-box" placeholder="e.g. 70" step="0.1" required />
-          </div>
-          <div class="input-group" style="flex:1;">
-            <label class="input-label">Height (cm)</label>
-            <input type="number" id="regHeight" class="input-box" placeholder="e.g. 175" required />
-          </div>
-        </div>
-        <button type="submit" class="btn-main">Save to SQL Database 🧬</button>
+        <button type="submit" class="btn-main">Save to SQL & Excel 🧬</button>
       </form>
     </div>
 
-    <!-- TAB 1: ACTIVITY -->
     <div id="tab-activity" class="tab-page">
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -365,36 +458,14 @@ app.get('/', (req, res) => {
 
         <div style="text-align: center; margin-top: 14px;">
           <div class="ring-container">
-            <svg class="ring-svg">
-              <circle class="ring-bg" cx="95" cy="95" r="85" />
-              <circle id="stepRingCircle" class="ring-bar" cx="95" cy="95" r="85" />
-            </svg>
-            <div class="ring-center-content">
-              <span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Steps</span>
-              <div class="steps-display" id="stepsVal">0</div>
-              <span id="stepsPctVal" style="font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700;">0%</span>
-            </div>
+            <svg class="ring-svg"><circle class="ring-bg" cx="95" cy="95" r="85" /><circle id="stepRingCircle" class="ring-bar" cx="95" cy="95" r="85" /></svg>
+            <div class="ring-center-content"><span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Steps</span><div class="steps-display" id="stepsVal">0</div><span id="stepsPctVal" style="font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700;">0%</span></div>
           </div>
-          
           <div id="targetSteps" style="font-size: 0.82rem; color: var(--text-muted); margin-top: 4px;">Target: 10,000 steps</div>
-
           <div class="stats-trio">
-            <div class="stat-pill">
-              <span class="val" id="dispDist">0.00</span>
-              <span class="lbl">Distance (km)</span>
-            </div>
-            <div class="stat-pill">
-              <span class="val" id="dispBurn" style="color: var(--accent-orange);">0</span>
-              <span class="lbl">Burned (kcal)</span>
-            </div>
-            <div class="stat-pill">
-              <span class="val" id="dispActiveMin" style="color: var(--accent-purple);">0</span>
-              <span class="lbl">Active Mins</span>
-            </div>
-          </div>
-          
-          <div id="sensorDiag" style="padding: 8px; border-radius: 10px; background: rgba(0,0,0,0.4); font-size: 0.72rem; color: var(--accent-cyan); margin-top: 12px; font-family: monospace;">
-            📡 Auto-Gait Engine Online
+            <div class="stat-pill"><span class="val" id="dispDist">0.00</span><span class="lbl">Distance (km)</span></div>
+            <div class="stat-pill"><span class="val" id="dispBurn" style="color: var(--accent-orange);">0</span><span class="lbl">Burned (kcal)</span></div>
+            <div class="stat-pill"><span class="val" id="dispActiveMin" style="color: var(--accent-purple);">0</span><span class="lbl">Active Mins</span></div>
           </div>
         </div>
       </div>
@@ -404,96 +475,80 @@ app.get('/', (req, res) => {
           <span class="section-title" style="margin-bottom: 0;">💧 Hydration</span>
           <b id="waterValQuick" style="color: var(--accent-cyan); font-family: 'Space Grotesk';">0.0L / --L</b>
         </div>
-        <div class="progress-track" style="margin: 10px 0;">
-          <div id="waterBarQuick" class="progress-fill" style="background: var(--accent-cyan);"></div>
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <button class="chip-btn" onclick="addWater(0.25)">+250ml 💧</button>
-          <button class="chip-btn" onclick="addWater(0.50)">+500ml 🌊</button>
-        </div>
+        <div class="progress-track" style="margin: 10px 0;"><div id="waterBarQuick" class="progress-fill" style="background: var(--accent-cyan);"></div></div>
+        <div style="display: flex; gap: 8px;"><button class="chip-btn" onclick="addWater(0.25)">+250ml 💧</button><button class="chip-btn" onclick="addWater(0.50)">+500ml 🌊</button></div>
       </div>
     </div>
 
-    <!-- TAB 2: NUTRITION -->
     <div id="tab-nutrition" class="tab-page">
       <div class="card">
         <div class="section-title">🥗 Daily Energy Blueprint</div>
-        <div style="display: flex; justify-content: space-between; align-items: baseline;">
-          <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Maintenance (TDEE)</span>
-          <b id="dispTDEE" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--text-muted);">-- kcal</b>
-        </div>
-        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px;">
-          <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Prescribed Target</span>
-          <b id="dispCalories" style="font-family: 'Space Grotesk'; font-size: 1.6rem; color: var(--accent-orange);">-- kcal</b>
-        </div>
-
+        <div style="display: flex; justify-content: space-between; align-items: baseline;"><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Maintenance (TDEE)</span><b id="dispTDEE" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--text-muted);">-- kcal</b></div>
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px;"><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Prescribed Target</span><b id="dispCalories" style="font-family: 'Space Grotesk'; font-size: 1.6rem; color: var(--accent-orange);">-- kcal</b></div>
         <div class="grid-3" style="margin-top: 16px;">
-          <div class="metric-card" style="text-align: center;">
-            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">PROTEIN</span>
-            <div id="macroProtein" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-rose); font-size:1.2rem; margin-top:2px;">--g</div>
-          </div>
-          <div class="metric-card" style="text-align: center;">
-            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">CARBS</span>
-            <div id="macroCarbs" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-cyan); font-size:1.2rem; margin-top:2px;">--g</div>
-          </div>
-          <div class="metric-card" style="text-align: center;">
-            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">FATS</span>
-            <div id="macroFats" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-green); font-size:1.2rem; margin-top:2px;">--g</div>
-          </div>
+          <div class="metric-card" style="text-align: center;"><span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">PROTEIN</span><div id="macroProtein" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-rose); font-size:1.2rem; margin-top:2px;">--g</div></div>
+          <div class="metric-card" style="text-align: center;"><span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">CARBS</span><div id="macroCarbs" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-cyan); font-size:1.2rem; margin-top:2px;">--g</div></div>
+          <div class="metric-card" style="text-align: center;"><span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">FATS</span><div id="macroFats" style="font-family:'Space Grotesk'; font-weight:700; color:var(--accent-green); font-size:1.2rem; margin-top:2px;">--g</div></div>
         </div>
       </div>
-
-      <div class="card">
-        <div class="section-title">🍽️ Smart Meal Partitioning</div>
-        <div class="grid-4" id="mealsContainer"></div>
-      </div>
+      <div class="card"><div class="section-title">🍽️ Smart Meal Partitioning</div><div class="grid-4" id="mealsContainer"></div></div>
     </div>
 
-    <!-- TAB 3: WORKOUTS -->
     <div id="tab-workouts" class="tab-page">
-      <div class="card">
-        <div class="section-title">🏋️ Prescribed Training Split</div>
-        <div id="workoutList"></div>
-      </div>
+      <div class="card"><div class="section-title">🏋️ Prescribed Training Split</div><div id="workoutList"></div></div>
     </div>
 
-    <!-- TAB 4: BIO HEALTH -->
     <div id="tab-health" class="tab-page">
       <div class="card">
         <div class="section-title">🧬 Biometric Diagnostics</div>
         <div class="grid-2">
-          <div class="metric-card">
-            <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Current BMI</span>
-            <div id="bioBMI" style="font-family:'Space Grotesk'; font-size: 1.4rem; font-weight: 700; color: var(--accent-cyan); margin-top: 2px;">--</div>
-          </div>
-          <div class="metric-card">
-            <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Ideal Weight Range</span>
-            <div id="bioIdealWeight" style="font-family:'Space Grotesk'; font-size: 1.2rem; font-weight: 700; color: var(--accent-green); margin-top: 2px;">-- kg</div>
-          </div>
+          <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Current BMI</span><div id="bioBMI" style="font-family:'Space Grotesk'; font-size: 1.4rem; font-weight: 700; color: var(--accent-cyan); margin-top: 2px;">--</div></div>
+          <div class="metric-card"><span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Ideal Weight Range</span><div id="bioIdealWeight" style="font-family:'Space Grotesk'; font-size: 1.2rem; font-weight: 700; color: var(--accent-green); margin-top: 2px;">-- kg</div></div>
         </div>
       </div>
-
-      <div class="card">
-        <div class="section-title">🎯 Targeted Body Protocols</div>
-        <div id="customTipsContainer"></div>
-      </div>
+      <div class="card"><div class="section-title">🎯 Targeted Body Protocols</div><div id="customTipsContainer"></div></div>
     </div>
 
-    <!-- BOTTOM TAB NAVIGATION -->
     <div id="bottomTabBar" class="tab-bar" style="display: none;">
       <button class="tab-btn active" onclick="switchTab('activity')"><span>⚡</span> Activity</button>
       <button class="tab-btn" onclick="switchTab('nutrition')"><span>🥗</span> Nutrition</button>
       <button class="tab-btn" onclick="switchTab('workouts')"><span>🏋️</span> Workouts</button>
       <button class="tab-btn" onclick="switchTab('health')"><span>🧬</span> Bio Health</button>
     </div>
-
   </div>
 
   <script>
+    // --- PWA SERVICE WORKER & INSTALL PROMPT ---
+    let deferredPrompt;
+    const installBtn = document.getElementById('pwaInstallBtn');
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration skipped:', err));
+      });
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (installBtn) installBtn.style.display = 'inline-block';
+    });
+
+    function triggerPWAInstall() {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult) => {
+        if (choiceResult.outcome === 'accepted') {
+          installBtn.style.display = 'none';
+        }
+        deferredPrompt = null;
+      });
+    }
+
+    // --- APPLICATION LOGIC ---
     let currentUser = JSON.parse(localStorage.getItem('pulseflow_session')) || null;
-    let isTrackingActive = false;
-    let gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
-    const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85; // ~534px
+    let isTrackingActive = false, gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
+    const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
 
     function toggleAuthMode(mode) {
       document.getElementById('tabBtnLogin').classList.toggle('active', mode === 'login');
@@ -530,24 +585,15 @@ app.get('/', (req, res) => {
         targetCalories = Math.max(1300, tdee - 450); proteinG = Math.round(weight * 2.0);
         fatG = Math.round((targetCalories * 0.25) / 9);
         carbG = Math.round((targetCalories - (proteinG * 4 + fatG * 9)) / 4);
-        tips = [
-          { icon: '🥗', title: 'Protein & Fiber Density', text: 'Prioritize lean proteins and fibrous vegetables for satiety during caloric deficit.' },
-          { icon: '🚶‍♂️', title: 'Daily Step Volume', text: 'Hit at least 10,000 steps daily to elevate basal energy expenditure.' }
-        ];
+        tips = [{ icon: '🥗', title: 'Protein & Fiber Density', text: 'Prioritize lean proteins and fibrous vegetables for satiety during caloric deficit.' }, { icon: '🚶‍♂️', title: 'Daily Step Volume', text: 'Hit at least 10,000 steps daily to elevate basal energy expenditure.' }];
         workouts = ['35 Min Incline Walk', '3 Sets x 12 Bodyweight Squats', '3 Sets x 10 Push-ups', '3 Sets x 40s Plank'];
       } else if (bmi < 18.5) {
         category = 'Lean Mass Growth'; targetSteps = 7000; targetWater = 2.5; targetCalories = tdee + 350;
-        tips = [
-          { icon: '🥜', title: 'Caloric Density', text: 'Eat nuts, seeds, oats, and whole milk for surplus calories.' },
-          { icon: '🏋️', title: 'Compound Strength', text: 'Focus on progressive resistance training (squats, bench, deadlifts).' }
-        ];
+        tips = [{ icon: '🥜', title: 'Caloric Density', text: 'Eat nuts, seeds, oats, and whole milk for surplus calories.' }, { icon: '🏋️', title: 'Compound Strength', text: 'Focus on progressive resistance training (squats, bench, deadlifts).' }];
         workouts = ['3 Sets x 8 Dumbbell Press', '3 Sets x 8 Rows', '3 Sets x 10 Romanian Deadlifts'];
       } else {
         category = 'Lean Maintenance'; targetSteps = 8500; targetWater = 3.0; targetCalories = tdee;
-        tips = [
-          { icon: '⚡', title: '80/20 Balance', text: '80% unprocessed whole foods with balanced nutrient profiles.' },
-          { icon: '🫀', title: 'Zone 2 Cardio', text: 'Perform 30 mins of conversational-pace exercise 3x weekly.' }
-        ];
+        tips = [{ icon: '⚡', title: '80/20 Balance', text: '80% unprocessed whole foods with balanced nutrient profiles.' }, { icon: '🫀', title: 'Zone 2 Cardio', text: 'Perform 30 mins of conversational-pace exercise 3x weekly.' }];
         workouts = ['20 Min Brisk Jog', '3 Sets x 12 Shoulder Press', '3 Sets x 15 Walking Lunges'];
       }
 
@@ -575,18 +621,15 @@ app.get('/', (req, res) => {
 
       try {
         const res = await fetch('/api/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
 
-        alert('Account saved in SQLite database! Logging in...');
+        alert('Account saved in SQLite & Excel Sheet!');
         handleLoginDirect(payload.email, payload.password);
-      } catch (err) {
-        alert(err.message);
-      }
+      } catch (err) { alert(err.message); }
     }
 
     async function handleLogin(e) {
@@ -599,8 +642,7 @@ app.get('/', (req, res) => {
     async function handleLoginDirect(email, password) {
       try {
         const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password })
         });
         const data = await res.json();
@@ -611,9 +653,7 @@ app.get('/', (req, res) => {
         localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
         loadDashboard();
         initAutoSensors();
-      } catch (err) {
-        alert(err.message);
-      }
+      } catch (err) { alert(err.message); }
     }
 
     function loadDashboard() {
@@ -625,7 +665,6 @@ app.get('/', (req, res) => {
       document.getElementById('userName').innerText = 'Hi, ' + currentUser.name + ' 👋';
       document.getElementById('userPlanCategory').innerText = currentUser.plan.category + ' (BMI ' + currentUser.plan.bmi + ')';
       document.getElementById('targetSteps').innerText = 'Target: ' + currentUser.plan.targetSteps.toLocaleString() + ' steps';
-
       document.getElementById('dispTDEE').innerText = currentUser.plan.tdee + ' kcal';
       document.getElementById('dispCalories').innerText = currentUser.plan.targetCalories + ' kcal';
       document.getElementById('macroProtein').innerText = currentUser.plan.proteinG + 'g';
@@ -651,10 +690,7 @@ app.get('/', (req, res) => {
       tipContainer.innerHTML = '';
       currentUser.plan.tips.forEach(t => {
         tipContainer.innerHTML += \`
-          <div class="tip-item">
-            <span style="font-size:1.2rem;">\${t.icon}</span>
-            <div><b style="color: #fff;">\${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">\${t.text}</div></div>
-          </div>
+          <div class="tip-item"><span style="font-size:1.2rem;">\${t.icon}</span><div><b style="color: #fff;">\${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">\${t.text}</div></div></div>
         \`;
       });
 
@@ -680,7 +716,6 @@ app.get('/', (req, res) => {
 
       const stepsPct = Math.min(100, Math.round((currentUser.steps / currentUser.plan.targetSteps) * 100));
       document.getElementById('stepsPctVal').innerText = stepsPct + '%';
-
       const offset = CIRCLE_CIRCUMFERENCE - (stepsPct / 100) * CIRCLE_CIRCUMFERENCE;
       document.getElementById('stepRingCircle').style.strokeDashoffset = offset;
 
@@ -694,18 +729,12 @@ app.get('/', (req, res) => {
       localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
       try {
         await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            id: currentUser.id,
-            steps: currentUser.steps,
-            water: currentUser.water,
-            completedWorkouts: currentUser.completedWorkouts
+            id: currentUser.id, steps: currentUser.steps, water: currentUser.water, completedWorkouts: currentUser.completedWorkouts
           })
         });
-      } catch (err) {
-        console.error('Database sync error:', err);
-      }
+      } catch (err) { console.error('Database sync error:', err); }
     }
 
     function addWater(amt) {
@@ -716,19 +745,13 @@ app.get('/', (req, res) => {
 
     function toggleWorkout(idx) {
       if (!currentUser.completedWorkouts) currentUser.completedWorkouts = [];
-      if (currentUser.completedWorkouts.includes(idx)) {
-        currentUser.completedWorkouts = currentUser.completedWorkouts.filter(i => i !== idx);
-      } else {
-        currentUser.completedWorkouts.push(idx);
-      }
+      if (currentUser.completedWorkouts.includes(idx)) currentUser.completedWorkouts = currentUser.completedWorkouts.filter(i => i !== idx);
+      else currentUser.completedWorkouts.push(idx);
       loadDashboard();
       syncBackend();
     }
 
-    function logout() {
-      localStorage.removeItem('pulseflow_session');
-      location.reload();
-    }
+    function logout() { localStorage.removeItem('pulseflow_session'); location.reload(); }
 
     async function initAutoSensors() {
       if (isTrackingActive) return;
@@ -743,14 +766,12 @@ app.get('/', (req, res) => {
       if (!currentUser) return;
       const acc = e.accelerationIncludingGravity || e.acceleration;
       if (!acc) return;
-
       const rawMag = Math.sqrt((acc.x || 0)**2 + (acc.y || 0)**2 + (acc.z || 0)**2);
       gravity = alpha * gravity + (1 - alpha) * rawMag;
       const linearAccel = Math.abs(rawMag - gravity);
       const now = Date.now();
 
       if (linearAccel > dynThreshold && linearAccel > lastFilteredVal) isPeakRising = true;
-
       if (isPeakRising && linearAccel < lastFilteredVal && (now - lastStepTime > 250) && (now - lastStepTime < 1800)) {
         currentUser.steps++;
         lastStepTime = now;
