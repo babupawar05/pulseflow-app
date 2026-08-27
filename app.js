@@ -12,9 +12,9 @@ app.use(cors());
 app.use(express.json());
 
 const dbPath = path.join(__dirname, 'fitness.db');
-const csvPath = path.join(__dirname, 'fitness_records.csv');
+const csvPath = path.resolve(__dirname, 'fitness_records.csv');
 
-// --- 1. REAL-TIME EXCEL / CSV DISK SYNC ---
+// --- 1. COMPREHENSIVE EXCEL / CSV DISK SYNC (ALL USER FEEDS & WORKOUTS) ---
 function exportToExcelCSV() {
   const query = `
     SELECT 
@@ -29,7 +29,7 @@ function exportToExcelCSV() {
       u.created_at
     FROM users u
     LEFT JOIN daily_logs d ON u.id = d.user_id
-    ORDER BY d.date ASC, u.id ASC
+    ORDER BY d.date DESC, u.id ASC
   `;
 
   db.all(query, [], (err, rows) => {
@@ -37,19 +37,25 @@ function exportToExcelCSV() {
 
     const headers = [
       'User ID', 'Full Name', 'Email', 'Phone Number', 'Age', 'Gender', 'Blood Group', 'Weight (kg)', 'Height (cm)',
-      'Log Date (YYYY-MM-DD)', 'Steps Count', 'Distance (km)', 'Calories (kcal)', 'Active Minutes',
-      'Sleep (hrs)', 'Completed Workouts', 'Registered At'
+      'Log Date (YYYY-MM-DD)', 'Steps Count', 'Distance (km)', 'Calories Burned (kcal)', 'Active Minutes',
+      'Sleep (hrs)', 'Completed Workouts List', 'Account Registered At'
     ];
     const csvRows = [headers.join(',')];
 
     (rows || []).forEach(r => {
-      let workouts = '';
-      try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
+      let workoutsFormatted = '';
+      try {
+        const parsedWorkouts = JSON.parse(r.daily_workouts || '[]');
+        workoutsFormatted = parsedWorkouts.join(' | ');
+      } catch (e) {
+        workoutsFormatted = '';
+      }
+
       const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
       const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
       const cleanPhone = `"${(r.phone || '').replace(/"/g, '""')}"`;
       const cleanBlood = `"${r.blood_group || 'O+'}"`;
-      const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
+      const cleanWorkouts = `"${workoutsFormatted.replace(/"/g, '""')}"`;
 
       csvRows.push([
         r.user_id,
@@ -74,7 +80,7 @@ function exportToExcelCSV() {
 
     try {
       fs.writeFileSync(csvPath, csvRows.join('\r\n'), 'utf8');
-      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} total records appended)`);
+      console.log(`📊 Excel Sheet Synchronized at: ${csvPath} (${(rows || []).length} total records)`);
     } catch (writeErr) {
       console.error('File write error:', writeErr.message);
     }
@@ -171,7 +177,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v20';
+    const CACHE_NAME = 'apexfit-v22';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -206,41 +212,15 @@ app.get('/sw.js', (req, res) => {
 // --- 4. BACKEND API ROUTES ---
 
 app.get('/api/export-excel', (req, res) => {
-  const query = `
-    SELECT 
-      u.id AS user_id, u.name, u.email, u.phone, u.age, u.gender, u.blood_group, u.weight, u.height,
-      COALESCE(d.date, DATE('now', 'localtime')) AS log_date,
-      COALESCE(d.steps, 0) AS daily_steps,
-      COALESCE(d.distance_km, 0) AS daily_km,
-      COALESCE(d.calories, 0) AS daily_calories,
-      COALESCE(d.active_minutes, 0) AS daily_active_mins,
-      COALESCE(d.sleep_hours, 7.5) AS daily_sleep,
-      COALESCE(d.completedWorkouts, '[]') AS daily_workouts,
-      u.created_at
-    FROM users u
-    LEFT JOIN daily_logs d ON u.id = d.user_id
-    ORDER BY d.date ASC, u.id ASC
-  `;
-
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).send('Database read error: ' + err.message);
-
-    const headers = 'User ID,Full Name,Email,Phone Number,Age,Gender,Blood Group,Weight (kg),Height (cm),Log Date (YYYY-MM-DD),Steps Count,Distance (km),Calories (kcal),Active Minutes,Sleep (hrs),Completed Workouts,Registered At\r\n';
-    const body = (rows || []).map(r => {
-      let workouts = '';
-      try { workouts = JSON.parse(r.daily_workouts || '[]').join('; '); } catch (e) { workouts = ''; }
-      const cleanName = `"${(r.name || '').replace(/"/g, '""')}"`;
-      const cleanEmail = `"${(r.email || '').replace(/"/g, '""')}"`;
-      const cleanPhone = `"${(r.phone || '').replace(/"/g, '""')}"`;
-      const cleanBlood = `"${r.blood_group || 'O+'}"`;
-      const cleanWorkouts = `"${workouts.replace(/"/g, '""')}"`;
-      return `${r.user_id},${cleanName},${cleanEmail},${cleanPhone},${r.age},${r.gender},${cleanBlood},${r.weight},${r.height},"${r.log_date}",${r.daily_steps},${r.daily_km},${r.daily_calories},${r.daily_active_mins},${r.daily_sleep},${cleanWorkouts},"${r.created_at}"`;
-    }).join('\r\n');
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="fitness_records.csv"');
-    res.send(headers + body);
-  });
+  exportToExcelCSV(); // Force fresh file sync before serving
+  setTimeout(() => {
+    res.download(csvPath, 'fitness_records.csv', (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        res.status(500).send('Could not download the file.');
+      }
+    });
+  }, 200);
 });
 
 app.post('/api/register', async (req, res) => {
@@ -371,6 +351,8 @@ app.get('/', (req, res) => {
       --bg-dark: #070913;
       --card-bg: rgba(16, 22, 38, 0.85);
       --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #fff;
+      --input-bg: rgba(0,0,0,0.5);
       --accent-green: #10b981;
       --accent-cyan: #06b6d4;
       --accent-orange: #f97316;
@@ -378,6 +360,16 @@ app.get('/', (req, res) => {
       --accent-purple: #a855f7;
       --text-muted: #94a3b8;
     }
+
+    [data-theme="light"] {
+      --bg-dark: #f1f5f9;
+      --card-bg: rgba(255, 255, 255, 0.92);
+      --card-border: rgba(0, 0, 0, 0.08);
+      --text-main: #0f172a;
+      --input-bg: rgba(0,0,0,0.03);
+      --text-muted: #64748b;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Plus Jakarta Sans', sans-serif;
@@ -386,7 +378,8 @@ app.get('/', (req, res) => {
         radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.12) 0px, transparent 45%),
         radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.10) 0px, transparent 40%),
         radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.10) 0px, transparent 50%);
-      color: #fff; min-height: 100vh; display: flex; justify-content: center; padding: 16px 14px 90px;
+      color: var(--text-main); min-height: 100vh; display: flex; justify-content: center; padding: 16px 14px 90px;
+      transition: background 0.3s ease, color 0.3s ease;
     }
     .app-container { width: 100%; max-width: 650px; display: flex; flex-direction: column; gap: 16px; }
     .nav-bar { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; }
@@ -398,6 +391,13 @@ app.get('/', (req, res) => {
     }
     .nav-actions { display: flex; gap: 6px; align-items: center; }
     
+    .theme-toggle-btn {
+      background: rgba(255,255,255,0.08); border: 1px solid var(--card-border);
+      color: var(--text-main); font-size: 0.85rem; width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s ease;
+    }
+    .theme-toggle-btn:active { transform: scale(0.9); }
+
     .pwa-btn {
       display: inline-block;
       background: linear-gradient(135deg, #8b5cf6, #6366f1);
@@ -425,18 +425,19 @@ app.get('/', (req, res) => {
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .card {
       background: var(--card-bg); backdrop-filter: blur(24px); border: 1px solid var(--card-border);
-      border-radius: 24px; padding: 22px; box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+      border-radius: 24px; padding: 22px; box-shadow: 0 12px 36px rgba(0,0,0,0.1);
+      transition: background 0.3s ease, border-color 0.3s ease;
     }
     .section-title { font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem; font-weight: 700; margin-bottom: 12px; }
     .input-group { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
     .input-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
     .input-box {
       width: 100%; padding: 12px 14px; border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.5);
-      color: #fff; font-size: 0.95rem; outline: none;
+      border: 1px solid var(--card-border); background: var(--input-bg);
+      color: var(--text-main); font-size: 0.95rem; outline: none;
     }
     .input-box:focus { border-color: var(--accent-cyan); }
-    .input-box:disabled { opacity: 0.6; cursor: not-allowed; background: rgba(0,0,0,0.2); }
+    .input-box:disabled { opacity: 0.6; cursor: not-allowed; background: rgba(0,0,0,0.05); }
     
     .btn-main {
       width: 100%; padding: 14px; border-radius: 50px; border: none;
@@ -445,15 +446,15 @@ app.get('/', (req, res) => {
       font-family: 'Space Grotesk', sans-serif; font-size: 1rem;
     }
     .btn-main:active { transform: scale(0.98); }
-    .auth-toggle { display: flex; background: rgba(0,0,0,0.4); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
+    .auth-toggle { display: flex; background: var(--input-bg); border-radius: 12px; padding: 4px; margin-bottom: 14px; border: 1px solid var(--card-border); }
     .auth-toggle button {
       flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-muted);
       font-weight: 700; border-radius: 8px; cursor: pointer;
     }
-    .auth-toggle button.active { background: rgba(255,255,255,0.1); color: #fff; }
+    .auth-toggle button.active { background: rgba(6,182,212,0.15); color: var(--accent-cyan); }
     .ring-container { position: relative; width: 190px; height: 190px; margin: 10px auto; display: flex; align-items: center; justify-content: center; }
     .ring-svg { transform: rotate(-90deg); width: 190px; height: 190px; }
-    .ring-bg { fill: none; stroke: rgba(255, 255, 255, 0.06); stroke-width: 12; }
+    .ring-bg { fill: none; stroke: var(--card-border); stroke-width: 12; }
     .ring-bar {
       fill: none; stroke: url(#cyanGreenGrad); stroke-width: 12; stroke-linecap: round;
       stroke-dasharray: 534; stroke-dashoffset: 534; transition: stroke-dashoffset 0.6s ease;
@@ -462,7 +463,7 @@ app.get('/', (req, res) => {
     .steps-display { font-size: 2.5rem; font-weight: 800; font-family: 'Space Grotesk', sans-serif; line-height: 1; }
     .stats-trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
     .stat-pill {
-      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+      background: var(--input-bg); border: 1px solid var(--card-border);
       border-radius: 16px; padding: 12px 6px; display: flex; flex-direction: column; align-items: center;
     }
     .stat-pill .val { font-family: 'Space Grotesk'; font-weight: 700; font-size: 1.15rem; color: var(--accent-cyan); }
@@ -470,16 +471,16 @@ app.get('/', (req, res) => {
     .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-    .metric-card { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06); border-radius: 18px; padding: 14px; }
+    .metric-card { background: var(--input-bg); border: 1px solid var(--card-border); border-radius: 18px; padding: 14px; }
     
     .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-    .calendar-nav-btn { background: rgba(255,255,255,0.08); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: 800; }
+    .calendar-nav-btn { background: var(--input-bg); border: 1px solid var(--card-border); color: var(--text-main); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: 800; }
     .calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; }
     .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
     .cal-day {
-      aspect-ratio: 1; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
+      aspect-ratio: 1; border-radius: 12px; background: var(--input-bg); border: 1px solid var(--card-border);
       display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 0.8rem;
-      cursor: pointer; position: relative; transition: all 0.2s;
+      cursor: pointer; position: relative; transition: all 0.2s; color: var(--text-main);
     }
     .cal-day:hover { border-color: var(--accent-cyan); background: rgba(6,182,212,0.1); }
     .cal-day.active-day { border-color: var(--accent-cyan); background: rgba(6,182,212,0.2); font-weight: 800; }
@@ -490,19 +491,19 @@ app.get('/', (req, res) => {
 
     .filter-pills { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 22px; }
     .filter-pill {
-      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      background: var(--input-bg); border: 1px solid var(--card-border);
       color: var(--text-muted); font-size: 0.75rem; font-weight: 700; padding: 7px 14px;
       border-radius: 20px; cursor: pointer; white-space: nowrap;
     }
     .filter-pill.active { background: var(--accent-cyan); color: #02120b; border-color: var(--accent-cyan); }
     
     .workout-card {
-      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+      background: var(--input-bg); border: 1px solid var(--card-border);
       border-radius: 18px; padding: 14px; margin-bottom: 12px; cursor: pointer;
       display: flex; justify-content: space-between; align-items: center;
     }
     .workout-card.done { opacity: 0.45; text-decoration: line-through; border-color: var(--accent-green); }
-    .diet-toggle { display: flex; background: rgba(0,0,0,0.5); border-radius: 20px; padding: 3px; gap: 4px; margin-bottom: 14px; }
+    .diet-toggle { display: flex; background: var(--input-bg); border-radius: 20px; padding: 3px; gap: 4px; margin-bottom: 14px; border: 1px solid var(--card-border); }
     .diet-btn {
       flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-muted);
       font-size: 0.8rem; font-weight: 700; border-radius: 16px; cursor: pointer;
@@ -510,28 +511,28 @@ app.get('/', (req, res) => {
     .diet-btn.active { background: var(--accent-green); color: #02120b; }
     .diet-btn.active.nonveg { background: var(--accent-orange); color: #fff; }
     .food-suggestion-card {
-      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+      background: var(--input-bg); border: 1px solid var(--card-border);
       border-radius: 16px; padding: 12px 14px; margin-top: 10px;
     }
     .meal-box {
-      cursor: pointer; transition: all 0.25s ease; border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 18px; padding: 14px; background: rgba(0,0,0,0.3);
+      cursor: pointer; transition: all 0.25s ease; border: 1px solid var(--card-border);
+      border-radius: 18px; padding: 14px; background: var(--input-bg);
     }
     .meal-box:hover { transform: translateY(-2px); border-color: var(--accent-cyan); }
     .meal-box.active { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.12); }
     .tab-bar {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
-      width: calc(100% - 24px); max-width: 600px; background: rgba(13, 17, 30, 0.94);
-      backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.12);
+      width: calc(100% - 24px); max-width: 600px; background: var(--card-bg);
+      backdrop-filter: blur(20px); border: 1px solid var(--card-border);
       border-radius: 36px; padding: 6px 8px; display: flex; justify-content: space-around;
-      z-index: 100;
+      z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.15);
     }
     .tab-btn {
       background: transparent; border: none; color: var(--text-muted); font-size: 0.70rem;
       font-weight: 700; padding: 8px 10px; border-radius: 20px; cursor: pointer;
       display: flex; flex-direction: column; align-items: center; gap: 3px;
     }
-    .tab-btn.active { color: #fff; background: rgba(255,255,255,0.1); }
+    .tab-btn.active { color: var(--text-main); background: var(--input-bg); }
     .tab-page { display: none; flex-direction: column; gap: 14px; }
     .tab-page.active { display: flex; }
 
@@ -541,14 +542,14 @@ app.get('/', (req, res) => {
       justify-content: center; align-items: flex-end; padding: 20px;
     }
     .modal-content {
-      background: #0f1526; border: 1px solid rgba(255,255,255,0.15);
+      background: var(--card-bg); border: 1px solid var(--card-border);
       border-radius: 28px; width: 100%; max-width: 480px; padding: 24px;
       display: flex; flex-direction: column; gap: 16px; animation: slideUp 0.3s ease-out;
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
   </style>
 </head>
-<body>
+<body id="appBody">
   <svg style="width:0; height:0; position:absolute;" aria-hidden="true" focusable="false">
     <linearGradient id="cyanGreenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#10b981" /><stop offset="100%" stop-color="#06b6d4" />
@@ -559,15 +560,15 @@ app.get('/', (req, res) => {
   <div id="iosInstallModal" class="modal-backdrop" onclick="closeIosModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <b style="font-family: 'Space Grotesk'; font-size: 1.15rem; color: #fff;">Install on Apple iPhone / iPad</b>
-        <button onclick="closeIosModal()" style="background: rgba(255,255,255,0.1); border:none; color:#fff; border-radius:50%; width:28px; height:28px; cursor:pointer;">✕</button>
+        <b style="font-family: 'Space Grotesk'; font-size: 1.15rem;">Install on Apple iPhone / iPad</b>
+        <button onclick="closeIosModal()" style="background: var(--input-bg); border:1px solid var(--card-border); color:var(--text-main); border-radius:50%; width:28px; height:28px; cursor:pointer;">✕</button>
       </div>
       <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">Add ApexFit to your iPhone home screen in 2 quick steps:</p>
-      <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.04); padding:12px; border-radius:14px;">
+      <div style="display:flex; align-items:center; gap:12px; background:var(--input-bg); padding:12px; border-radius:14px; border: 1px solid var(--card-border);">
         <span style="font-size:1.4rem;">1️⃣</span>
         <div style="font-size:0.85rem;">Tap the <b>Share button</b> (<span style="color:var(--accent-cyan);">⎋ or ⍗</span>) in Safari toolbar.</div>
       </div>
-      <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.04); padding:12px; border-radius:14px;">
+      <div style="display:flex; align-items:center; gap:12px; background:var(--input-bg); padding:12px; border-radius:14px; border: 1px solid var(--card-border);">
         <span style="font-size:1.4rem;">2️⃣</span>
         <div style="font-size:0.85rem;">Scroll down and tap <b>'Add to Home Screen'</b> (➕).</div>
       </div>
@@ -579,8 +580,9 @@ app.get('/', (req, res) => {
     <div class="nav-bar">
       <div class="brand-logo">🔥 ApexFit</div>
       <div class="nav-actions">
+        <button id="themeToggleBtn" class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">🌙</button>
         <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
-        <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
+        <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:var(--input-bg); border:1px solid var(--card-border); color:var(--text-main); font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
         <div class="badge"><span class="live-dot"></span> Live</div>
       </div>
     </div>
@@ -636,10 +638,10 @@ app.get('/', (req, res) => {
             <h2 id="userName" style="font-family: 'Space Grotesk'; font-size: 1.35rem;">Hi</h2>
             <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
               <span id="selectedDateLabel" style="color: var(--accent-cyan); font-size: 0.8rem; font-weight: 800; text-transform: uppercase;">TODAY</span>
-              <span id="isPastBadge" style="display:none; font-size:0.65rem; background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:8px; color:var(--text-muted);">HISTORICAL</span>
+              <span id="isPastBadge" style="display:none; font-size:0.65rem; background:var(--input-bg); padding:2px 6px; border-radius:8px; color:var(--text-muted); border: 1px solid var(--card-border);">HISTORICAL</span>
             </div>
           </div>
-          <button style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--accent-rose); padding: 4px 10px; border-radius: 12px; font-size: 0.72rem; cursor: pointer;" onclick="logout()">Log Out</button>
+          <button style="background: var(--input-bg); border: 1px solid var(--card-border); color: var(--accent-rose); padding: 4px 10px; border-radius: 12px; font-size: 0.72rem; cursor: pointer;" onclick="logout()">Log Out</button>
         </div>
 
         <div style="text-align: center; margin-top: 14px;">
@@ -683,7 +685,7 @@ app.get('/', (req, res) => {
           </div>
           <div class="metric-card">
             <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">Hourly Hydration Ping</span>
-            <div style="color:var(--accent-cyan); font-family:'Space Grotesk'; font-weight:700; font-size:1.0rem; margin-top:2px;">Active (Next: <span id="nextReminderTime" style="color:#fff;">--:--</span>)</div>
+            <div style="color:var(--accent-cyan); font-family:'Space Grotesk'; font-weight:700; font-size:1.0rem; margin-top:2px;">Active (Next: <span id="nextReminderTime" style="color:var(--text-main);">--:--</span>)</div>
           </div>
         </div>
       </div>
@@ -711,7 +713,7 @@ app.get('/', (req, res) => {
 
         <div class="grid-4" id="mealsContainer"></div>
 
-        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 14px;">
+        <div id="selectedMealPanel" style="margin-top: 18px; border-top: 1px solid var(--card-border); padding-top: 14px;">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <b id="selectedMealTitle" style="font-family: 'Space Grotesk'; font-size: 1.1rem; color: var(--accent-cyan);">Breakfast Breakdown</b>
             <span id="selectedMealCalorieTag" style="font-size: 0.8rem; color: var(--accent-orange); font-weight: 700;">Target: -- kcal</span>
@@ -827,6 +829,27 @@ app.get('/', (req, res) => {
   <script>
     let deferredPrompt = null;
     const installBtn = document.getElementById('pwaInstallBtn');
+
+    // --- THEME TOGGLE LOGIC ---
+    let currentTheme = localStorage.getItem('apexfit_theme') || 'dark';
+    function applyTheme(theme) {
+      currentTheme = theme;
+      const bodyEl = document.getElementById('appBody');
+      const toggleBtn = document.getElementById('themeToggleBtn');
+      if (theme === 'light') {
+        bodyEl.setAttribute('data-theme', 'light');
+        toggleBtn.innerText = '☀️';
+      } else {
+        bodyEl.removeAttribute('data-theme');
+        toggleBtn.innerText = '🌙';
+      }
+      localStorage.setItem('apexfit_theme', theme);
+    }
+    applyTheme(currentTheme);
+
+    function toggleTheme() {
+      applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+    }
 
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     if (isStandalone && installBtn) installBtn.style.display = 'none';
@@ -1271,7 +1294,7 @@ app.get('/', (req, res) => {
         foodContainer.innerHTML += \`
           <div class="food-suggestion-card">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-              <b style="font-size:0.92rem; color:#fff; font-family:'Space Grotesk';">\${food.name}</b>
+              <b style="font-size:0.92rem; color:var(--text-main); font-family:'Space Grotesk';">\${food.name}</b>
               <span style="font-family:'Space Grotesk'; color:var(--accent-orange); font-weight:700; font-size:0.9rem;">\${food.cal} kcal</span>
             </div>
             <p style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 8px;">\${food.desc}</p>
@@ -1306,7 +1329,7 @@ app.get('/', (req, res) => {
         container.innerHTML += \`
           <div class="workout-card \${isDone ? 'done' : ''}" onclick="toggleWorkout('\${uniqueKey}')">
             <div>
-              <b style="font-size:0.92rem; color:#fff; font-family:'Space Grotesk';">\${w.name}</b>
+              <b style="font-size:0.92rem; color:var(--text-main); font-family:'Space Grotesk';">\${w.name}</b>
               <div style="font-size:0.75rem; color:var(--accent-cyan); margin-top:2px;">\${w.sets} • \${w.reps} • <span style="color:var(--accent-orange);">\${w.rest}</span></div>
               <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px;">\${w.focus}</div>
             </div>
@@ -1464,7 +1487,7 @@ app.get('/', (req, res) => {
       tipContainer.innerHTML = '';
       currentUser.plan.tips.forEach(t => {
         tipContainer.innerHTML += \`
-          <div class="tip-item"><span style="font-size:1.2rem;">\${t.icon}</span><div><b style="color: #fff;">\${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">\${t.text}</div></div></div>
+          <div class="tip-item"><span style="font-size:1.2rem;">\${t.icon}</span><div><b style="color: var(--text-main);">\${t.title}</b><div style="color: var(--text-muted); font-size: 0.8rem;">\${t.text}</div></div></div>
         \`;
       });
 
