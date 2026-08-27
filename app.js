@@ -14,7 +14,7 @@ app.use(express.json());
 const dbPath = path.join(__dirname, 'fitness.db');
 const csvPath = path.join(__dirname, 'fitness_records.csv');
 
-// --- 1. REAL-TIME EXCEL / CSV DISK SYNC (DAILY LOGS + PROFILES) ---
+// --- 1. REAL-TIME EXCEL / CSV DISK SYNC (ALL USERS, APPENDED CHRONOLOGICALLY) ---
 function exportToExcelCSV() {
   const query = `
     SELECT 
@@ -29,7 +29,7 @@ function exportToExcelCSV() {
       u.created_at
     FROM users u
     LEFT JOIN daily_logs d ON u.id = d.user_id
-    ORDER BY u.id ASC, d.date DESC
+    ORDER BY d.date ASC, u.id ASC
   `;
 
   db.all(query, [], (err, rows) => {
@@ -72,7 +72,7 @@ function exportToExcelCSV() {
 
     try {
       fs.writeFileSync(csvPath, csvRows.join('\r\n'), 'utf8');
-      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} daily records)`);
+      console.log(`📊 Excel Sheet Synchronized: fitness_records.csv (${(rows || []).length} total records appended)`);
     } catch (writeErr) {
       console.error('File write error:', writeErr.message);
     }
@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v10';
+    const CACHE_NAME = 'pulseflow-v11';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -214,7 +214,7 @@ app.get('/api/export-excel', (req, res) => {
       u.created_at
     FROM users u
     LEFT JOIN daily_logs d ON u.id = d.user_id
-    ORDER BY u.id ASC, d.date DESC
+    ORDER BY d.date ASC, u.id ASC
   `;
 
   db.all(query, [], (err, rows) => {
@@ -573,7 +573,7 @@ app.get('/', (req, res) => {
       <div class="brand-logo">⚡ PulseFlow</div>
       <div class="nav-actions">
         <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
-        <!-- STRICTLY LOCKED TO babupawar1207@gmail.com OR BABU -->
+        <!-- EXCEL DOWNLOAD BUTTON: VISIBLE ONLY FOR babupawar1207@gmail.com -->
         <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
         <div class="badge"><span class="live-dot"></span> Live</div>
       </div>
@@ -1376,12 +1376,10 @@ app.get('/', (req, res) => {
       document.getElementById('authCard').style.display = 'none';
       document.getElementById('bottomTabBar').style.display = 'flex';
 
-      // STRICT CHECK FOR babupawar1207@gmail.com OR BABU
       const excelBtn = document.getElementById('excelDownloadBtn');
       if (excelBtn) {
         const userEmail = (currentUser.email || '').toLowerCase().trim();
-        const userName = (currentUser.name || '').toLowerCase().trim();
-        if (userEmail === 'babupawar1207@gmail.com' || userName.includes('babu') || userName.includes('shubham')) {
+        if (userEmail === 'babupawar1207@gmail.com') {
           excelBtn.style.display = 'inline-block';
         } else {
           excelBtn.style.display = 'none';
