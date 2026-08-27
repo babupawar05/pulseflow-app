@@ -14,7 +14,7 @@ app.use(express.json());
 const dbPath = path.join(__dirname, 'fitness.db');
 const csvPath = path.resolve(__dirname, 'fitness_records.csv');
 
-// --- 1. COMPREHENSIVE EXCEL / CSV DISK SYNC (ALL USER FEEDS & WORKOUTS) ---
+// --- 1. COMPREHENSIVE EXCEL / CSV DISK SYNC (CHRONOLOGICAL ORDER) ---
 function exportToExcelCSV() {
   const query = `
     SELECT 
@@ -29,7 +29,7 @@ function exportToExcelCSV() {
       u.created_at
     FROM users u
     LEFT JOIN daily_logs d ON u.id = d.user_id
-    ORDER BY d.date DESC, u.id ASC
+    ORDER BY d.date ASC, u.id ASC
   `;
 
   db.all(query, [], (err, rows) => {
@@ -177,7 +177,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v22';
+    const CACHE_NAME = 'apexfit-v23';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -212,7 +212,7 @@ app.get('/sw.js', (req, res) => {
 // --- 4. BACKEND API ROUTES ---
 
 app.get('/api/export-excel', (req, res) => {
-  exportToExcelCSV(); // Force fresh file sync before serving
+  exportToExcelCSV();
   setTimeout(() => {
     res.download(csvPath, 'fitness_records.csv', (err) => {
       if (err) {
