@@ -177,7 +177,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'apexfit-v25';
+    const CACHE_NAME = 'apexfit-v26';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -221,37 +221,6 @@ app.get('/api/export-excel', (req, res) => {
       }
     });
   }, 200);
-});
-
-// --- AI COACH STACY API ---
-app.post('/api/chat', (req, res) => {
-  const { message, userStats } = req.body;
-  if (!message) return res.status(400).json({ error: 'Message required' });
-
-  const text = message.toLowerCase();
-  let reply = "Hey! I'm Stacy, your AI fitness coach. Keep moving, stay hydrated, and crush your daily targets!";
-
-  const name = userStats?.name || 'Athlete';
-  const weight = userStats?.weight || 70;
-  const targetCal = userStats?.targetCalories || 2000;
-  const protein = userStats?.proteinG || 130;
-  const bmi = userStats?.bmi || 22;
-
-  if (text.includes('protein') || text.includes('diet') || text.includes('eat') || text.includes('food')) {
-    reply = `Hey ${name}! Stacy here. Based on your profile (${weight} kg), your target is around ${protein}g of protein daily. Focus on lean sources like paneer, chicken breast, eggs, Greek yogurt, moong dal sprouts, and lentils.`;
-  } else if (text.includes('calorie') || text.includes('weight') || text.includes('goal')) {
-    reply = `${name}, your current BMI is ${bmi}. Your daily energy target is set to ${targetCal} kcal. Stay consistent with your calorie deficit or surplus depending on your fitness goals!`;
-  } else if (text.includes('workout') || text.includes('exercise') || text.includes('gym') || text.includes('muscle')) {
-    reply = `Stacy's tip: Make sure to hit your progressive training modules! Focus on compound lifts like bench press, squats, and deadlifts, with 90 seconds rest between heavy sets.`;
-  } else if (text.includes('step') || text.includes('walk') || text.includes('cardio')) {
-    reply = `Aim for at least 10,000 steps daily. Use your phone's built-in pedometer tab to track your live walks and keep your heart healthy!`;
-  } else if (text.includes('hello') || text.includes('hi') || text.includes('hey')) {
-    reply = `Hello ${name}! This is Coach Stacy. How can I help you crush your fitness goals today? Ask me about workouts, nutrition, or your daily targets!`;
-  }
-
-  setTimeout(() => {
-    res.json({ reply });
-  }, 400);
 });
 
 app.post('/api/register', async (req, res) => {
@@ -551,17 +520,6 @@ app.get('/', (req, res) => {
     }
     .meal-box:hover { transform: translateY(-2px); border-color: var(--accent-cyan); }
     .meal-box.active { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.12); }
-    
-    /* CHATBOT STYLES */
-    .chat-messages { height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px; margin-bottom: 12px; }
-    .chat-bubble { max-width: 80%; padding: 12px 14px; border-radius: 16px; font-size: 0.88rem; line-height: 1.4; }
-    .chat-bubble.user { background: var(--accent-cyan); color: #02120b; align-self: flex-end; border-bottom-right-radius: 4px; font-weight: 600; }
-    .chat-bubble.bot { background: var(--input-bg); border: 1px solid var(--card-border); color: var(--text-main); align-self: flex-start; border-bottom-left-radius: 4px; }
-    .chat-input-row { display: flex; gap: 8px; }
-    .chat-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px; }
-    .chat-chip { background: var(--input-bg); border: 1px solid var(--card-border); color: var(--text-muted); font-size: 0.72rem; padding: 5px 10px; border-radius: 14px; cursor: pointer; white-space: nowrap; }
-    .chat-chip:hover { border-color: var(--accent-cyan); color: var(--text-main); }
-
     .tab-bar {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
       width: calc(100% - 24px); max-width: 600px; background: var(--card-bg);
@@ -570,9 +528,9 @@ app.get('/', (req, res) => {
       z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.15);
     }
     .tab-btn {
-      background: transparent; border: none; color: var(--text-muted); font-size: 0.65rem;
-      font-weight: 700; padding: 8px 8px; border-radius: 20px; cursor: pointer;
-      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      background: transparent; border: none; color: var(--text-muted); font-size: 0.70rem;
+      font-weight: 700; padding: 8px 10px; border-radius: 20px; cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
     }
     .tab-btn.active { color: var(--text-main); background: var(--input-bg); }
     .tab-page { display: none; flex-direction: column; gap: 14px; }
@@ -795,30 +753,7 @@ app.get('/', (req, res) => {
       <div class="card"><div class="section-title">🎯 Targeted Protocols</div><div id="customTipsContainer"></div></div>
     </div>
 
-    <!-- TAB 5: AI COACH STACY -->
-    <div id="tab-chat" class="tab-page">
-      <div class="card">
-        <div class="section-title">🤖 AI Coach Stacy</div>
-        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Ask Stacy anything about your diet, workouts, or daily goals!</p>
-        
-        <div class="chat-chips">
-          <span class="chat-chip" onclick="sendQuickPrompt('What should I eat for high protein?')">🥗 High Protein Foods</span>
-          <span class="chat-chip" onclick="sendQuickPrompt('Tell me my calorie target & BMI')">📊 My Stats</span>
-          <span class="chat-chip" onclick="sendQuickPrompt('How do I improve my workouts?')">💪 Workout Tips</span>
-        </div>
-
-        <div id="chatMessages" class="chat-messages">
-          <div class="chat-bubble bot">Hey there! I'm Stacy, your personal AI fitness coach. How can I help you crush your goals today?</div>
-        </div>
-
-        <div class="chat-input-row">
-          <input type="text" id="chatInputBox" class="input-box" placeholder="Ask Coach Stacy anything..." onkeydown="if(event.key==='Enter') sendChatMessage()" />
-          <button class="btn-main" onclick="sendChatMessage()" style="margin-top:0; width: 80px; padding: 10px;">Send 🚀</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB 6: EDIT PROFILE -->
+    <!-- TAB 5: EDIT PROFILE -->
     <div id="tab-profile" class="tab-page">
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -887,7 +822,6 @@ app.get('/', (req, res) => {
       <button class="tab-btn" onclick="switchTab('nutrition')"><span>🥗</span> Nutrition</button>
       <button class="tab-btn" onclick="switchTab('workouts')"><span>🏋️</span> Workouts</button>
       <button class="tab-btn" onclick="switchTab('health')"><span>🧬</span> Bio Health</button>
-      <button class="tab-btn" onclick="switchTab('chat')"><span>🤖</span> AI Stacy</button>
       <button class="tab-btn" onclick="switchTab('profile')"><span>👤</span> Profile</button>
     </div>
   </div>
@@ -952,36 +886,6 @@ app.get('/', (req, res) => {
 
     function closeIosModal() {
       document.getElementById('iosInstallModal').style.display = 'none';
-    }
-
-    // --- CHATBOT FRONTEND LOGIC ---
-    function sendQuickPrompt(text) {
-      document.getElementById('chatInputBox').value = text;
-      sendChatMessage();
-    }
-
-    async function sendChatMessage() {
-      const inputEl = document.getElementById('chatInputBox');
-      const msg = inputEl.value.trim();
-      if (!msg) return;
-
-      const chatContainer = document.getElementById('chatMessages');
-      chatContainer.innerHTML += \`<div class="chat-bubble user">\${msg}</div>\`;
-      inputEl.value = '';
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, userStats: currentUser ? currentUser.plan : null })
-        });
-        const data = await res.json();
-        chatContainer.innerHTML += \`<div class="chat-bubble bot">\${data.reply}</div>\`;
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      } catch (err) {
-        chatContainer.innerHTML += \`<div class="chat-bubble bot">Sorry, I'm having trouble connecting right now.</div>\`;
-      }
     }
 
     function setupHourlyHydrationNotifier(createdAtString) {
