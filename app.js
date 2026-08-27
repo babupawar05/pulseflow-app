@@ -144,8 +144,8 @@ app.get('/icon.svg', (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.setHeader('Content-Type', 'application/manifest+json');
   res.json({
-    name: "PulseFlow Fitness OS",
-    short_name: "PulseFlow",
+    name: "ApexFit Fitness OS",
+    short_name: "ApexFit",
     description: "Daily Calendar Fitness Tracking & Health OS",
     start_url: "/",
     display: "standalone",
@@ -166,7 +166,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
-    const CACHE_NAME = 'pulseflow-v13';
+    const CACHE_NAME = 'apexfit-v14';
     const ASSETS = ['/', '/manifest.json', '/icon.svg'];
 
     self.addEventListener('install', (event) => {
@@ -350,13 +350,13 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>PulseFlow // Fitness OS</title>
+  <title>ApexFit // Fitness OS</title>
 
   <link rel="manifest" href="/manifest.json" />
   <meta name="theme-color" content="#070913" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="PulseFlow" />
+  <meta name="apple-mobile-web-app-title" content="ApexFit" />
   <link rel="apple-touch-icon" href="/icon.svg" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
 
@@ -557,7 +557,7 @@ app.get('/', (req, res) => {
         <b style="font-family: 'Space Grotesk'; font-size: 1.15rem; color: #fff;">Install on Apple iPhone / iPad</b>
         <button onclick="closeIosModal()" style="background: rgba(255,255,255,0.1); border:none; color:#fff; border-radius:50%; width:28px; height:28px; cursor:pointer;">✕</button>
       </div>
-      <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">Add PulseFlow to your iPhone home screen in 2 quick steps:</p>
+      <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">Add ApexFit to your iPhone home screen in 2 quick steps:</p>
       <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.04); padding:12px; border-radius:14px;">
         <span style="font-size:1.4rem;">1️⃣</span>
         <div style="font-size:0.85rem;">Tap the <b>Share button</b> (<span style="color:var(--accent-cyan);">⎋ or ⍗</span>) in Safari toolbar.</div>
@@ -572,7 +572,7 @@ app.get('/', (req, res) => {
 
   <div class="app-container">
     <div class="nav-bar">
-      <div class="brand-logo">⚡ PulseFlow</div>
+      <div class="brand-logo">🔥 ApexFit</div>
       <div class="nav-actions">
         <button id="pwaInstallBtn" class="pwa-btn" onclick="triggerPWAInstall()">📲 Install App</button>
         <a id="excelDownloadBtn" href="/api/export-excel" style="display:none; text-decoration:none; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px;">📥 Excel</a>
@@ -847,7 +847,7 @@ app.get('/', (req, res) => {
       } else if (isIos()) {
         document.getElementById('iosInstallModal').style.display = 'flex';
       } else {
-        alert("To install PulseFlow: Click your browser's menu (top right) and select 'Install PulseFlow' or 'Add to Home Screen'.");
+        alert("To install ApexFit: Click your browser's menu (top right) and select 'Install ApexFit' or 'Add to Home Screen'.");
       }
     }
 
@@ -894,7 +894,7 @@ app.get('/', (req, res) => {
       return y + '-' + m + '-' + d;
     }
 
-    let currentUser = JSON.parse(localStorage.getItem('pulseflow_session')) || null;
+    let currentUser = JSON.parse(localStorage.getItem('apexfit_session')) || null;
     let todayDateStr = getTodayDateString();
     let selectedDateStr = todayDateStr;
     let currentCalMonth = new Date().getMonth();
@@ -904,7 +904,7 @@ app.get('/', (req, res) => {
     let currentDietMode = 'veg';
     let selectedMealIndex = 0;
     let currentWorkoutCategory = 'chest_triceps';
-    let isTrackingActive = false, gravity = 9.8, alpha = 0.85, dynThreshold = 0.55, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
+    let isTrackingActive = false, lastStepTime = 0, isPeakRising = false, lastFilteredVal = 0;
     let isEditingProfile = false;
     const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 85;
 
@@ -1002,7 +1002,7 @@ app.get('/', (req, res) => {
       const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
       if (activeBtn) activeBtn.classList.add('active');
 
-      localStorage.setItem('pulseflow_active_tab', tabId);
+      localStorage.setItem('apexfit_active_tab', tabId);
     }
 
     function toggleProfileEdit() {
@@ -1026,7 +1026,7 @@ app.get('/', (req, res) => {
         btn.style.borderColor = 'rgba(6,182,212,0.3)';
         btn.style.background = 'rgba(6,182,212,0.15)';
         submitBtn.style.display = 'none';
-        loadDashboard(); // Reset inputs back to current user state
+        loadDashboard();
       }
     }
 
@@ -1361,7 +1361,7 @@ app.get('/', (req, res) => {
 
         currentUser = data.user;
         currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
-        localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
+        localStorage.setItem('apexfit_session', JSON.stringify(currentUser));
         loadDashboard();
         initAutoSensors();
         setupHourlyHydrationNotifier(currentUser.created_at);
@@ -1402,8 +1402,8 @@ app.get('/', (req, res) => {
         currentUser.height = updatedHeight;
         currentUser.plan = computePlan(currentUser.weight, currentUser.height, currentUser.age, currentUser.gender);
 
-        localStorage.setItem('pulseflow_session', JSON.stringify(currentUser));
-        toggleProfileEdit(); // Relock fields
+        localStorage.setItem('apexfit_session', JSON.stringify(currentUser));
+        toggleProfileEdit();
         loadDashboard();
         alert('Profile & Blood Group updated!');
       } catch (err) {
@@ -1426,7 +1426,7 @@ app.get('/', (req, res) => {
         }
       }
 
-      const savedTab = localStorage.getItem('pulseflow_active_tab') || 'activity';
+      const savedTab = localStorage.getItem('apexfit_active_tab') || 'activity';
       switchTab(savedTab);
 
       document.getElementById('userName').innerText = 'Hi, ' + currentUser.name + ' 👋';
@@ -1466,8 +1466,8 @@ app.get('/', (req, res) => {
     }
 
     function logout() { 
-      localStorage.removeItem('pulseflow_session');
-      localStorage.removeItem('pulseflow_active_tab');
+      localStorage.removeItem('apexfit_session');
+      localStorage.removeItem('apexfit_active_tab');
       location.reload(); 
     }
 
@@ -1480,33 +1480,44 @@ app.get('/', (req, res) => {
       isTrackingActive = true;
     }
 
+    // --- STRICT STRICT PEDOMETER STEP DETECTION ENGINE ---
     function handleMotion(e) {
       if (!currentUser) return;
       const acc = e.accelerationIncludingGravity || e.acceleration;
       if (!acc) return;
+
       const rawMag = Math.sqrt((acc.x || 0)**2 + (acc.y || 0)**2 + (acc.z || 0)**2);
-      gravity = alpha * gravity + (1 - alpha) * rawMag;
-      const linearAccel = Math.abs(rawMag - gravity);
+      const linearAccel = Math.abs(rawMag - 9.8); // Remove earth gravity baseline
       const now = Date.now();
 
       if (selectedDateStr !== todayDateStr) return;
 
-      if (linearAccel > dynThreshold && linearAccel > lastFilteredVal) isPeakRising = true;
-      if (isPeakRising && linearAccel < lastFilteredVal && (now - lastStepTime > 250) && (now - lastStepTime < 1800)) {
-        const log = getCurrentActiveLog();
-        log.steps++;
-        log.distance_km = parseFloat((log.steps * 0.00075).toFixed(2));
-        log.calories = Math.round(log.steps * 0.04);
-        log.active_minutes = Math.round(log.steps / 100);
+      // STRICT THRESHOLD: Ignore minor jitters, typing, or desk movement (< 0.85 m/s² impact)
+      const walkThreshold = 0.85;
 
-        lastStepTime = now;
-        isPeakRising = false;
-        renderActiveDateUI();
-        renderCalendar();
-        syncActiveLogToDB();
-      } else if (now - lastStepTime >= 1800) {
-        lastStepTime = now;
-        isPeakRising = false;
+      if (linearAccel > walkThreshold && linearAccel > lastFilteredVal) {
+        isPeakRising = true;
+      }
+
+      // STRICT CADENCE WINDOW: Human steps must be between 350ms and 1400ms apart
+      if (isPeakRising && linearAccel < lastFilteredVal) {
+        const timeDelta = now - lastStepTime;
+        if (timeDelta > 350 && timeDelta < 1400) {
+          const log = getCurrentActiveLog();
+          log.steps++;
+          log.distance_km = parseFloat((log.steps * 0.00075).toFixed(2));
+          log.calories = Math.round(log.steps * 0.04);
+          log.active_minutes = Math.round(log.steps / 100);
+
+          lastStepTime = now;
+          isPeakRising = false;
+          renderActiveDateUI();
+          renderCalendar();
+          syncActiveLogToDB();
+        } else if (timeDelta >= 1400) {
+          lastStepTime = now; // Reset step rhythm baseline
+          isPeakRising = false;
+        }
       }
       lastFilteredVal = linearAccel;
     }
@@ -1523,5 +1534,5 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 PulseFlow Full-Stack Server active on http://localhost:${PORT}`);
+  console.log(`🚀 ApexFit Full-Stack Server active on http://localhost:${PORT}`);
 });
